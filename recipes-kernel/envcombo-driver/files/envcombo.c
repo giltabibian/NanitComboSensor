@@ -16,12 +16,15 @@
 #include <linux/mutex.h>
 #include <linux/regmap.h>
 
+#include <linux/iio/events.h>
 #include <linux/iio/iio.h>
 
 #define ENVCOMBO_REG_WHO_AM_I	0x00
 #define ENVCOMBO_REG_ALS_MSB	0x04
 #define ENVCOMBO_REG_CFG	0x06
 #define ENVCOMBO_REG_INT_CFG	0x07
+#define ENVCOMBO_REG_ALS_TH_LOW		0x08
+#define ENVCOMBO_REG_ALS_TH_HIGH	0x0A
 #define ENVCOMBO_REG_STATUS	0x0C
 #define ENVCOMBO_REG_CAL_ALS_GAIN	0x10
 #define ENVCOMBO_REG_CAL_ALS_TIME	0x11
@@ -36,6 +39,7 @@
 #define ENVCOMBO_INT_CFG_EN	BIT(7)
 #define ENVCOMBO_INT_CFG_LATCH	BIT(6)
 
+#define ENVCOMBO_STATUS_ALS_INT	BIT(0)
 #define ENVCOMBO_STATUS_ALS_RDY	BIT(3)
 
 #define ENVCOMBO_PWR_MODE_MASK	GENMASK(1, 0)
@@ -72,9 +76,27 @@ struct envcombo_data {
 	u8 calib_again;
 	u8 calib_atime;
 
+	u16 thresh_low;
+	u16 thresh_high;
+
 	bool ev_en_rising;
 	bool ev_en_falling;
 	bool buffer_en;
+};
+
+static const struct iio_event_spec envcombo_als_event_specs[] = {
+	{
+		.type = IIO_EV_TYPE_THRESH,
+		.dir = IIO_EV_DIR_RISING,
+		.mask_separate = BIT(IIO_EV_INFO_VALUE) |
+				 BIT(IIO_EV_INFO_ENABLE),
+	},
+	{
+		.type = IIO_EV_TYPE_THRESH,
+		.dir = IIO_EV_DIR_FALLING,
+		.mask_separate = BIT(IIO_EV_INFO_VALUE) |
+				 BIT(IIO_EV_INFO_ENABLE),
+	},
 };
 
 static const struct iio_chan_spec envcombo_channels[] = {
@@ -87,6 +109,8 @@ static const struct iio_chan_spec envcombo_channels[] = {
 		.info_mask_separate_available =
 				       BIT(IIO_CHAN_INFO_HARDWAREGAIN) |
 				       BIT(IIO_CHAN_INFO_INT_TIME),
+		.event_spec = envcombo_als_event_specs,
+		.num_event_specs = ARRAY_SIZE(envcombo_als_event_specs),
 	},
 };
 
