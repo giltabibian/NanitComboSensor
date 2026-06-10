@@ -515,9 +515,9 @@ static irqreturn_t envcombo_trigger_handler(int irq, void *p)
 
 	ret = envcombo_read_reg16(data->client, ENVCOMBO_REG_ALS_MSB,
 				   &data->scan.light);
-	if (!ret)
-		iio_push_to_buffers_with_timestamp(indio_dev, &data->scan,
-						    iio_get_time_ns(indio_dev));
+		if (!ret)
+			iio_push_to_buffers_with_timestamp(indio_dev, &data->scan,
+						    pf->timestamp);
 
 	iio_trigger_notify_done(indio_dev->trig);
 
