@@ -22,39 +22,38 @@
 #include <linux/iio/trigger_consumer.h>
 #include <linux/iio/triggered_buffer.h>
 
-#define ENVCOMBO_REG_WHO_AM_I	0x00
-#define ENVCOMBO_REG_ALS_MSB	0x04
-#define ENVCOMBO_REG_CFG	0x06
-#define ENVCOMBO_REG_INT_CFG	0x07
-#define ENVCOMBO_REG_ALS_TH_LOW		0x08
-#define ENVCOMBO_REG_ALS_TH_HIGH	0x0A
-#define ENVCOMBO_REG_STATUS	0x0C
-#define ENVCOMBO_REG_CAL_ALS_GAIN	0x10
-#define ENVCOMBO_REG_CAL_ALS_TIME	0x11
-#define ENVCOMBO_REG_PWR_MODE	0x12
+#define ENVCOMBO_REG_WHO_AM_I			0x00
+#define ENVCOMBO_REG_ALS_MSB			0x04
+#define ENVCOMBO_REG_CFG				0x06
+#define ENVCOMBO_REG_INT_CFG			0x07
+#define ENVCOMBO_REG_ALS_TH_LOW			0x08
+#define ENVCOMBO_REG_ALS_TH_HIGH		0x0A
+#define ENVCOMBO_REG_STATUS				0x0C
+#define ENVCOMBO_REG_CAL_ALS_GAIN		0x10
+#define ENVCOMBO_REG_CAL_ALS_TIME		0x11
+#define ENVCOMBO_REG_PWR_MODE			0x12
 
-#define ENVCOMBO_WHO_AM_I_VAL	0xEB
+#define ENVCOMBO_WHO_AM_I_VAL			0xEB
 
-#define ENVCOMBO_CFG_ALS_EN		BIT(7)
-#define ENVCOMBO_CFG_ALS_GAIN_MASK	GENMASK(4, 3)
-#define ENVCOMBO_CFG_ALS_TIME_MASK	GENMASK(2, 1)
+#define ENVCOMBO_PWR_SLEEP				0x01
+#define ENVCOMBO_PWR_ONE_SHOT			0x02
+#define ENVCOMBO_PWR_CONTINUOUS			0x03
 
-#define ENVCOMBO_INT_CFG_EN	BIT(7)
-#define ENVCOMBO_INT_CFG_LATCH	BIT(6)
+#define ENVCOMBO_CFG_ALS_EN				BIT(7)
+#define ENVCOMBO_INT_CFG_EN				BIT(7)
+#define ENVCOMBO_INT_CFG_LATCH			BIT(6)
+#define ENVCOMBO_STATUS_ALS_INT			BIT(0)
+#define ENVCOMBO_STATUS_ALS_RDY			BIT(3)
 
-#define ENVCOMBO_STATUS_ALS_INT	BIT(0)
-#define ENVCOMBO_STATUS_ALS_RDY	BIT(3)
-
-#define ENVCOMBO_PWR_MODE_MASK	GENMASK(1, 0)
-#define ENVCOMBO_PWR_SLEEP	0x01
-#define ENVCOMBO_PWR_ONE_SHOT	0x02
-#define ENVCOMBO_PWR_CONTINUOUS	0x03
-
-#define ENVCOMBO_RAW_READ_TIMEOUT_MS	500
+#define ENVCOMBO_CFG_ALS_GAIN_MASK		GENMASK(4, 3)
+#define ENVCOMBO_CFG_ALS_TIME_MASK		GENMASK(2, 1)
+#define ENVCOMBO_PWR_MODE_MASK			GENMASK(1, 0)
 
 /* Defaults written to CFG[4:3]/[2:1] at probe: gain x1, integration time 200ms */
-#define ENVCOMBO_DEFAULT_GAIN_IDX	0
-#define ENVCOMBO_DEFAULT_TIME_IDX	2
+#define ENVCOMBO_DEFAULT_GAIN_IDX		0
+#define ENVCOMBO_DEFAULT_TIME_IDX		2
+#define ENVCOMBO_RAW_READ_TIMEOUT_MS	500
+
 
 static const int envcombo_als_gain_table[] = { 1, 4, 16, 64 };
 static const int envcombo_als_time_table_us[] = {
@@ -666,6 +665,6 @@ static struct i2c_driver envcombo_driver = {
 };
 module_i2c_driver(envcombo_driver);
 
-MODULE_AUTHOR("");
+MODULE_AUTHOR("Gil Tabibian");
 MODULE_DESCRIPTION("ENV-COMBO IIO ambient light sensor driver");
 MODULE_LICENSE("GPL");
