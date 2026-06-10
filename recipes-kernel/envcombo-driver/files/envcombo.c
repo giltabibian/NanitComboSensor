@@ -641,9 +641,13 @@ static int envcombo_probe(struct i2c_client *client)
 		return ret;
 
 	indio_dev->trig = iio_trigger_get(data->trig);
+	ret = devm_add_action_or_reset(dev, (void (*)(void *))iio_trigger_put,
+				       indio_dev->trig);
+	if (ret)
+		return ret;
 
 	ret = devm_iio_triggered_buffer_setup(dev, indio_dev, NULL,
-					       envcombo_trigger_handler, NULL);
+				       envcombo_trigger_handler, NULL);
 	if (ret)
 		return ret;
 
