@@ -371,6 +371,7 @@ static int envcombo_read_event_value(struct iio_dev *indio_dev,
 {
 	struct envcombo_data *data = iio_priv(indio_dev);
 
+	mutex_lock(&data->lock);
 	switch (dir) {
 	case IIO_EV_DIR_RISING:
 		*val = data->thresh_high;
@@ -379,8 +380,10 @@ static int envcombo_read_event_value(struct iio_dev *indio_dev,
 		*val = data->thresh_low;
 		break;
 	default:
+		mutex_unlock(&data->lock);
 		return -EINVAL;
 	}
+	mutex_unlock(&data->lock);
 
 	return IIO_VAL_INT;
 }
@@ -544,19 +547,38 @@ static irqreturn_t envcombo_irq_thread(int irq, void *private)
 	}
 
 	if (status & ENVCOMBO_STATUS_ALS_INT) {
-		if (data->ev_en_rising)
-			iio_push_event(indio_dev,
-				       IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
-							     IIO_EV_TYPE_THRESH,
-							     IIO_EV_DIR_RISING),
-				       iio_get_time_ns(indio_dev));
+		u16 light;
+		s64 ts;
+		int ret;
 
-		if (data->ev_en_falling)
-			iio_push_event(indio_dev,
-				       IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
-							     IIO_EV_TYPE_THRESH,
-							     IIO_EV_DIR_FALLING),
-				       iio_get_time_ns(indio_dev));
+		/*
+		 * The hardware reports threshold crossings via a single
+		 * ALS_INT bit with no direction info, so disambiguate by
+		 * reading the current sample and comparing against the
+		 * configured thresholds. If the sample has already moved
+		 * back in range by the time we read it, the event is
+		 * dropped rather than misreported.
+		 */
+		mutex_lock(&data->lock);
+		ret = envcombo_read_reg16(data->client, ENVCOMBO_REG_ALS_MSB, &light);
+		if (!ret) {
+			ts = iio_get_time_ns(indio_dev);
+
+			if (data->ev_en_rising && light >= data->thresh_high)
+				iio_push_event(indio_dev,
+					       IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
+								     IIO_EV_TYPE_THRESH,
+								     IIO_EV_DIR_RISING),
+					       ts);
+
+			if (data->ev_en_falling && light <= data->thresh_low)
+				iio_push_event(indio_dev,
+					       IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
+								     IIO_EV_TYPE_THRESH,
+								     IIO_EV_DIR_FALLING),
+					       ts);
+		}
+		mutex_unlock(&data->lock);
 	}
 
 	return IRQ_HANDLED;
@@ -667,7 +689,8 @@ static int envcombo_probe(struct i2c_client *client)
 	if (ret)
 		return ret;
 
-	ret = devm_iio_triggered_buffer_setup(dev, indio_dev, NULL,
+	ret = devm_iio_triggered_buffer_setup(dev, indio_dev,
+					       iio_pollfunc_store_time,
 					       envcombo_trigger_handler, NULL);
 	if (ret)
 		return ret;
