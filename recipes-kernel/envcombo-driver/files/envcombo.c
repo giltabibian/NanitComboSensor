@@ -99,24 +99,29 @@ static int envcombo_update_bits(struct i2c_client *client, u8 reg, u8 mask, u8 v
 /* 16-bit big-endian register pair (MSB first). */
 static int envcombo_read_reg16(struct i2c_client *client, u8 reg, u16 *val)
 {
-	u8 buf[2];
-	int ret;
+	int msb, lsb;
 
-	ret = i2c_smbus_read_i2c_block_data(client, reg, sizeof(buf), buf);
-	if (ret < 0)
-		return ret;
-	if (ret != sizeof(buf))
-		return -EIO;
+	msb = envcombo_read_reg(client, reg);
+	if (msb < 0)
+		return msb;
 
-	*val = ((u16)buf[0] << 8) | buf[1];
+	lsb = envcombo_read_reg(client, reg + 1);
+	if (lsb < 0)
+		return lsb;
+
+	*val = ((u16)msb << 8) | (u16)lsb;
 	return 0;
 }
 
 static int envcombo_write_reg16(struct i2c_client *client, u8 reg, u16 val)
 {
-	u8 buf[2] = { val >> 8, val & 0xFF };
+	int ret;
 
-	return i2c_smbus_write_i2c_block_data(client, reg, sizeof(buf), buf);
+	ret = envcombo_write_reg(client, reg, val >> 8);
+	if (ret < 0)
+		return ret;
+
+	return envcombo_write_reg(client, reg + 1, val & 0xFF);
 }
 
 struct envcombo_data {
