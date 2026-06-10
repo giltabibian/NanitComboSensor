@@ -321,9 +321,12 @@ static int envcombo_write_raw(struct iio_dev *indio_dev,
 	switch (mask) {
 	case IIO_CHAN_INFO_HARDWAREGAIN:
 		idx = -1;
-		for (i = 0; i < ARRAY_SIZE(envcombo_als_gain_table); i++)
-			if (envcombo_als_gain_table[i] == val)
+		for (i = 0; i < ARRAY_SIZE(envcombo_als_gain_table); i++) {
+			if (envcombo_als_gain_table[i] == val) {
 				idx = i;
+				break;
+			}
+		}
 		if (idx < 0)
 			return -EINVAL;
 
@@ -341,10 +344,14 @@ static int envcombo_write_raw(struct iio_dev *indio_dev,
 			return -EOPNOTSUPP;
 
 		idx = -1;
-		if (val == 0)
-			for (i = 0; i < ARRAY_SIZE(envcombo_als_time_table_us); i++)
-				if (envcombo_als_time_table_us[i] == val2)
+		if (val == 0) {
+			for (i = 0; i < ARRAY_SIZE(envcombo_als_time_table_us); i++) {
+				if (envcombo_als_time_table_us[i] == val2) {
 					idx = i;
+					break;
+				}
+			}
+		}
 		if (idx < 0)
 			return -EINVAL;
 
@@ -608,7 +615,7 @@ static int envcombo_probe(struct i2c_client *client)
 
 	if (!i2c_check_functionality(client->adapter,
 				      I2C_FUNC_SMBUS_BYTE_DATA |
-				      I2C_FUNC_SMBUS_I2C_BLOCK))
+				      I2C_FUNC_SMBUS_WORD_DATA))
 		return -EOPNOTSUPP;
 
 	indio_dev = devm_iio_device_alloc(dev, sizeof(*data));
@@ -671,6 +678,12 @@ static int envcombo_probe(struct i2c_client *client)
 	if (ret)
 		return ret;
 	data->thresh_high = 0xFFFF;
+
+	/* Stay low-power until a raw read, buffer, or event is requested. */
+	ret = envcombo_update_bits(client, ENVCOMBO_REG_PWR_MODE,
+				    ENVCOMBO_PWR_MODE_MASK, ENVCOMBO_PWR_SLEEP);
+	if (ret)
+		return ret;
 
 	ret = devm_request_threaded_irq(dev, client->irq, NULL,
 					 envcombo_irq_thread,
