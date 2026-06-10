@@ -371,19 +371,16 @@ static int envcombo_read_event_value(struct iio_dev *indio_dev,
 {
 	struct envcombo_data *data = iio_priv(indio_dev);
 
-	mutex_lock(&data->lock);
 	switch (dir) {
 	case IIO_EV_DIR_RISING:
-		*val = data->thresh_high;
+		*val = READ_ONCE(data->thresh_high);
 		break;
 	case IIO_EV_DIR_FALLING:
-		*val = data->thresh_low;
+		*val = READ_ONCE(data->thresh_low);
 		break;
 	default:
-		mutex_unlock(&data->lock);
 		return -EINVAL;
 	}
-	mutex_unlock(&data->lock);
 
 	return IIO_VAL_INT;
 }
@@ -412,7 +409,7 @@ static int envcombo_write_event_value(struct iio_dev *indio_dev,
 		ret = envcombo_write_reg16(data->client, ENVCOMBO_REG_ALS_TH_HIGH,
 					    val);
 		if (!ret)
-			data->thresh_high = val;
+			WRITE_ONCE(data->thresh_high, val);
 		break;
 
 	case IIO_EV_DIR_FALLING:
@@ -423,7 +420,7 @@ static int envcombo_write_event_value(struct iio_dev *indio_dev,
 		ret = envcombo_write_reg16(data->client, ENVCOMBO_REG_ALS_TH_LOW,
 					    val);
 		if (!ret)
-			data->thresh_low = val;
+			WRITE_ONCE(data->thresh_low, val);
 		break;
 
 	default:
@@ -443,9 +440,9 @@ static int envcombo_read_event_config(struct iio_dev *indio_dev,
 
 	switch (dir) {
 	case IIO_EV_DIR_RISING:
-		return data->ev_en_rising;
+		return READ_ONCE(data->ev_en_rising);
 	case IIO_EV_DIR_FALLING:
-		return data->ev_en_falling;
+		return READ_ONCE(data->ev_en_falling);
 	default:
 		return -EINVAL;
 	}
@@ -464,10 +461,10 @@ static int envcombo_write_event_config(struct iio_dev *indio_dev,
 
 	switch (dir) {
 	case IIO_EV_DIR_RISING:
-		data->ev_en_rising = !!state;
+		WRITE_ONCE(data->ev_en_rising, !!state);
 		break;
 	case IIO_EV_DIR_FALLING:
-		data->ev_en_falling = !!state;
+		WRITE_ONCE(data->ev_en_falling, !!state);
 		break;
 	default:
 		mutex_unlock(&data->lock);
@@ -542,14 +539,13 @@ static irqreturn_t envcombo_irq_thread(int irq, void *private)
 
 	if (status & ENVCOMBO_STATUS_ALS_RDY) {
 		complete(&data->als_done);
-		if (data->buffer_en)
+		if (READ_ONCE(data->buffer_en))
 			iio_trigger_poll(data->trig);
 	}
 
 	if (status & ENVCOMBO_STATUS_ALS_INT) {
-		u16 light;
-		s64 ts;
-		int ret;
+		bool en_rising = READ_ONCE(data->ev_en_rising);
+		bool en_falling = READ_ONCE(data->ev_en_falling);
 
 		/*
 		 * The hardware reports threshold crossings via a single
@@ -558,27 +554,38 @@ static irqreturn_t envcombo_irq_thread(int irq, void *private)
 		 * configured thresholds. If the sample has already moved
 		 * back in range by the time we read it, the event is
 		 * dropped rather than misreported.
+		 *
+		 * Avoid data->lock here: this is a threaded IRQF_ONESHOT
+		 * handler, so blocking on a mutex held by the raw-read path
+		 * (up to ENVCOMBO_RAW_READ_TIMEOUT_MS) would delay re-arming
+		 * the interrupt. The ev_en_ and thresh_ fields are
+		 * snapshotted with READ_ONCE() instead, paired with
+		 * WRITE_ONCE() on the sysfs write side.
 		 */
-		mutex_lock(&data->lock);
-		ret = envcombo_read_reg16(data->client, ENVCOMBO_REG_ALS_MSB, &light);
-		if (!ret) {
-			ts = iio_get_time_ns(indio_dev);
+		if (en_rising || en_falling) {
+			u16 light;
+			s64 ts;
+			int ret;
 
-			if (data->ev_en_rising && light >= data->thresh_high)
-				iio_push_event(indio_dev,
-					       IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
-								     IIO_EV_TYPE_THRESH,
-								     IIO_EV_DIR_RISING),
-					       ts);
+			ret = envcombo_read_reg16(data->client, ENVCOMBO_REG_ALS_MSB, &light);
+			if (!ret) {
+				ts = iio_get_time_ns(indio_dev);
 
-			if (data->ev_en_falling && light <= data->thresh_low)
-				iio_push_event(indio_dev,
-					       IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
-								     IIO_EV_TYPE_THRESH,
-								     IIO_EV_DIR_FALLING),
-					       ts);
+				if (en_rising && light >= READ_ONCE(data->thresh_high))
+					iio_push_event(indio_dev,
+						       IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
+									     IIO_EV_TYPE_THRESH,
+									     IIO_EV_DIR_RISING),
+						       ts);
+
+				if (en_falling && light <= READ_ONCE(data->thresh_low))
+					iio_push_event(indio_dev,
+						       IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
+									     IIO_EV_TYPE_THRESH,
+									     IIO_EV_DIR_FALLING),
+						       ts);
+			}
 		}
-		mutex_unlock(&data->lock);
 	}
 
 	return IRQ_HANDLED;
