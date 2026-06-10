@@ -443,6 +443,44 @@ static const struct iio_info envcombo_info = {
 	.write_event_config = envcombo_write_event_config,
 };
 
+static int envcombo_set_trigger_state(struct iio_trigger *trig, bool enable)
+{
+	struct iio_dev *indio_dev = iio_trigger_get_drvdata(trig);
+	struct envcombo_data *data = iio_priv(indio_dev);
+	int ret;
+
+	mutex_lock(&data->lock);
+	data->buffer_en = enable;
+	ret = envcombo_update_power_mode(data);
+	mutex_unlock(&data->lock);
+
+	return ret;
+}
+
+static const struct iio_trigger_ops envcombo_trigger_ops = {
+	.set_trigger_state = envcombo_set_trigger_state,
+};
+
+static irqreturn_t envcombo_trigger_handler(int irq, void *p)
+{
+	struct iio_poll_func *pf = p;
+	struct iio_dev *indio_dev = pf->indio_dev;
+	struct envcombo_data *data = iio_priv(indio_dev);
+	u8 buf[2];
+	int ret;
+
+	ret = regmap_bulk_read(data->regmap, ENVCOMBO_REG_ALS_MSB, buf, 2);
+	if (!ret) {
+		data->scan.light = ((u16)buf[0] << 8) | buf[1];
+		iio_push_to_buffers_with_timestamp(indio_dev, &data->scan,
+						    iio_get_time_ns(indio_dev));
+	}
+
+	iio_trigger_notify_done(indio_dev->trig);
+
+	return IRQ_HANDLED;
+}
+
 static irqreturn_t envcombo_irq_thread(int irq, void *private)
 {
 	struct iio_dev *indio_dev = private;
@@ -454,8 +492,11 @@ static irqreturn_t envcombo_irq_thread(int irq, void *private)
 	if (ret)
 		return IRQ_NONE;
 
-	if (status & ENVCOMBO_STATUS_ALS_RDY)
+	if (status & ENVCOMBO_STATUS_ALS_RDY) {
 		complete(&data->als_done);
+		if (data->buffer_en)
+			iio_trigger_poll(data->trig);
+	}
 
 	if (status & ENVCOMBO_STATUS_ALS_INT)
 		iio_push_event(indio_dev,
@@ -552,6 +593,25 @@ static int envcombo_probe(struct i2c_client *client)
 					 envcombo_irq_thread,
 					 IRQF_TRIGGER_LOW | IRQF_ONESHOT,
 					 "envcombo", indio_dev);
+	if (ret)
+		return ret;
+
+	data->trig = devm_iio_trigger_alloc(dev, "%s-dev%d", indio_dev->name,
+					     iio_device_id(indio_dev));
+	if (!data->trig)
+		return -ENOMEM;
+
+	data->trig->ops = &envcombo_trigger_ops;
+	iio_trigger_set_drvdata(data->trig, indio_dev);
+
+	ret = devm_iio_trigger_register(dev, data->trig);
+	if (ret)
+		return ret;
+
+	indio_dev->trig = iio_trigger_get(data->trig);
+
+	ret = devm_iio_triggered_buffer_setup(dev, indio_dev, NULL,
+					       envcombo_trigger_handler, NULL);
 	if (ret)
 		return ret;
 
