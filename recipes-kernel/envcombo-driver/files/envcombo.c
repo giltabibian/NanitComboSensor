@@ -49,8 +49,8 @@
 #define ENVCOMBO_DEFAULT_GAIN_IDX	0
 #define ENVCOMBO_DEFAULT_TIME_IDX	2
 
-static const unsigned int envcombo_als_gain_table[] = { 1, 4, 16, 64 };
-static const unsigned int envcombo_als_time_table_us[] = {
+static const int envcombo_als_gain_table[] = { 1, 4, 16, 64 };
+static const int envcombo_als_time_table_us[] = {
 	50000, 100000, 200000, 400000,
 };
 
@@ -141,7 +141,7 @@ static int envcombo_read_raw(struct iio_dev *indio_dev,
 			      int *val, int *val2, long mask)
 {
 	struct envcombo_data *data = iio_priv(indio_dev);
-	unsigned int gain;
+	int gain;
 
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
@@ -176,7 +176,7 @@ static int envcombo_read_avail(struct iio_dev *indio_dev,
 {
 	switch (mask) {
 	case IIO_CHAN_INFO_HARDWAREGAIN:
-		*vals = (const int *)envcombo_als_gain_table;
+		*vals = envcombo_als_gain_table;
 		*type = IIO_VAL_INT;
 		*length = ARRAY_SIZE(envcombo_als_gain_table);
 		return IIO_AVAIL_LIST;
