@@ -141,10 +141,115 @@ static int envcombo_read_raw(struct iio_dev *indio_dev,
 			      int *val, int *val2, long mask)
 {
 	struct envcombo_data *data = iio_priv(indio_dev);
+	unsigned int gain;
 
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
 		return envcombo_read_als_raw(data, val) ?: IIO_VAL_INT;
+
+	case IIO_CHAN_INFO_SCALE:
+		gain = envcombo_als_gain_table[data->als_gain_idx] *
+		       (data->calib_again ?: 1);
+		*val = 1;
+		*val2 = gain;
+		return IIO_VAL_FRACTIONAL;
+
+	case IIO_CHAN_INFO_HARDWAREGAIN:
+		*val = envcombo_als_gain_table[data->als_gain_idx];
+		return IIO_VAL_INT;
+
+	case IIO_CHAN_INFO_INT_TIME:
+		*val = 0;
+		*val2 = data->calib_atime ? data->calib_atime * 1000 :
+			envcombo_als_time_table_us[data->als_time_idx];
+		return IIO_VAL_INT_PLUS_MICRO;
+
+	default:
+		return -EINVAL;
+	}
+}
+
+static int envcombo_read_avail(struct iio_dev *indio_dev,
+				struct iio_chan_spec const *chan,
+				const int **vals, int *type, int *length,
+				long mask)
+{
+	switch (mask) {
+	case IIO_CHAN_INFO_HARDWAREGAIN:
+		*vals = (const int *)envcombo_als_gain_table;
+		*type = IIO_VAL_INT;
+		*length = ARRAY_SIZE(envcombo_als_gain_table);
+		return IIO_AVAIL_LIST;
+
+	case IIO_CHAN_INFO_INT_TIME:
+		*vals = envcombo_als_time_avail;
+		*type = IIO_VAL_INT_PLUS_MICRO;
+		*length = ARRAY_SIZE(envcombo_als_time_avail);
+		return IIO_AVAIL_LIST;
+
+	default:
+		return -EINVAL;
+	}
+}
+
+static int envcombo_write_raw_get_fmt(struct iio_dev *indio_dev,
+				       struct iio_chan_spec const *chan,
+				       long mask)
+{
+	switch (mask) {
+	case IIO_CHAN_INFO_INT_TIME:
+		return IIO_VAL_INT_PLUS_MICRO;
+	default:
+		return IIO_VAL_INT;
+	}
+}
+
+static int envcombo_write_raw(struct iio_dev *indio_dev,
+			       struct iio_chan_spec const *chan,
+			       int val, int val2, long mask)
+{
+	struct envcombo_data *data = iio_priv(indio_dev);
+	int ret, idx, i;
+
+	switch (mask) {
+	case IIO_CHAN_INFO_HARDWAREGAIN:
+		idx = -1;
+		for (i = 0; i < ARRAY_SIZE(envcombo_als_gain_table); i++)
+			if (envcombo_als_gain_table[i] == val)
+				idx = i;
+		if (idx < 0)
+			return -EINVAL;
+
+		mutex_lock(&data->lock);
+		ret = regmap_update_bits(data->regmap, ENVCOMBO_REG_CFG,
+					  ENVCOMBO_CFG_ALS_GAIN_MASK,
+					  FIELD_PREP(ENVCOMBO_CFG_ALS_GAIN_MASK, idx));
+		if (!ret)
+			data->als_gain_idx = idx;
+		mutex_unlock(&data->lock);
+		return ret;
+
+	case IIO_CHAN_INFO_INT_TIME:
+		if (data->calib_atime)
+			return -EOPNOTSUPP;
+
+		idx = -1;
+		if (val == 0)
+			for (i = 0; i < ARRAY_SIZE(envcombo_als_time_table_us); i++)
+				if (envcombo_als_time_table_us[i] == val2)
+					idx = i;
+		if (idx < 0)
+			return -EINVAL;
+
+		mutex_lock(&data->lock);
+		ret = regmap_update_bits(data->regmap, ENVCOMBO_REG_CFG,
+					  ENVCOMBO_CFG_ALS_TIME_MASK,
+					  FIELD_PREP(ENVCOMBO_CFG_ALS_TIME_MASK, idx));
+		if (!ret)
+			data->als_time_idx = idx;
+		mutex_unlock(&data->lock);
+		return ret;
+
 	default:
 		return -EINVAL;
 	}
@@ -152,6 +257,9 @@ static int envcombo_read_raw(struct iio_dev *indio_dev,
 
 static const struct iio_info envcombo_info = {
 	.read_raw = envcombo_read_raw,
+	.read_avail = envcombo_read_avail,
+	.write_raw = envcombo_write_raw,
+	.write_raw_get_fmt = envcombo_write_raw_get_fmt,
 };
 
 static irqreturn_t envcombo_irq_thread(int irq, void *private)
