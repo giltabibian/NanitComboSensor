@@ -515,8 +515,8 @@ static irqreturn_t envcombo_trigger_handler(int irq, void *p)
 
 	ret = envcombo_read_reg16(data->client, ENVCOMBO_REG_ALS_MSB,
 				   &data->scan.light);
-		if (!ret)
-			iio_push_to_buffers_with_timestamp(indio_dev, &data->scan,
+	if (!ret)
+		iio_push_to_buffers_with_timestamp(indio_dev, &data->scan,
 						    pf->timestamp);
 
 	iio_trigger_notify_done(indio_dev->trig);
@@ -540,12 +540,21 @@ static irqreturn_t envcombo_irq_thread(int irq, void *private)
 			iio_trigger_poll(data->trig);
 	}
 
-	if (status & ENVCOMBO_STATUS_ALS_INT)
-		iio_push_event(indio_dev,
-			       IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
-						     IIO_EV_TYPE_THRESH,
-						     IIO_EV_DIR_EITHER),
-			       iio_get_time_ns(indio_dev));
+	if (status & ENVCOMBO_STATUS_ALS_INT) {
+		if (data->ev_en_rising)
+			iio_push_event(indio_dev,
+				       IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
+							     IIO_EV_TYPE_THRESH,
+							     IIO_EV_DIR_RISING),
+				       iio_get_time_ns(indio_dev));
+
+		if (data->ev_en_falling)
+			iio_push_event(indio_dev,
+				       IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
+							     IIO_EV_TYPE_THRESH,
+							     IIO_EV_DIR_FALLING),
+				       iio_get_time_ns(indio_dev));
+	}
 
 	return IRQ_HANDLED;
 }
