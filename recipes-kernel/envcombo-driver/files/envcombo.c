@@ -126,6 +126,22 @@ static int envcombo_update_power_mode(struct envcombo_data *data)
 					    ENVCOMBO_PWR_SLEEP);
 }
 
+/* Caller must hold data->lock. */
+static int envcombo_update_event_en(struct envcombo_data *data)
+{
+	int ret;
+
+	if (data->ev_en_rising || data->ev_en_falling) {
+		ret = regmap_update_bits(data->regmap, ENVCOMBO_REG_INT_CFG,
+					  ENVCOMBO_INT_CFG_EN,
+					  ENVCOMBO_INT_CFG_EN);
+		if (ret)
+			return ret;
+	}
+
+	return envcombo_update_power_mode(data);
+}
+
 static int envcombo_read_als_raw(struct envcombo_data *data, int *val)
 {
 	u8 buf[2];
@@ -279,11 +295,134 @@ static int envcombo_write_raw(struct iio_dev *indio_dev,
 	}
 }
 
+static int envcombo_read_event_value(struct iio_dev *indio_dev,
+				      const struct iio_chan_spec *chan,
+				      enum iio_event_type type,
+				      enum iio_event_direction dir,
+				      enum iio_event_info info,
+				      int *val, int *val2)
+{
+	struct envcombo_data *data = iio_priv(indio_dev);
+
+	switch (dir) {
+	case IIO_EV_DIR_RISING:
+		*val = data->thresh_high;
+		break;
+	case IIO_EV_DIR_FALLING:
+		*val = data->thresh_low;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return IIO_VAL_INT;
+}
+
+static int envcombo_write_event_value(struct iio_dev *indio_dev,
+				       const struct iio_chan_spec *chan,
+				       enum iio_event_type type,
+				       enum iio_event_direction dir,
+				       enum iio_event_info info,
+				       int val, int val2)
+{
+	struct envcombo_data *data = iio_priv(indio_dev);
+	u8 buf[2];
+	int ret;
+
+	if (val < 0 || val > 0xFFFF)
+		return -EINVAL;
+
+	buf[0] = (val >> 8) & 0xFF;
+	buf[1] = val & 0xFF;
+
+	mutex_lock(&data->lock);
+
+	switch (dir) {
+	case IIO_EV_DIR_RISING:
+		if (val < data->thresh_low) {
+			ret = -EINVAL;
+			break;
+		}
+		ret = regmap_bulk_write(data->regmap, ENVCOMBO_REG_ALS_TH_HIGH,
+					 buf, 2);
+		if (!ret)
+			data->thresh_high = val;
+		break;
+
+	case IIO_EV_DIR_FALLING:
+		if (val > data->thresh_high) {
+			ret = -EINVAL;
+			break;
+		}
+		ret = regmap_bulk_write(data->regmap, ENVCOMBO_REG_ALS_TH_LOW,
+					 buf, 2);
+		if (!ret)
+			data->thresh_low = val;
+		break;
+
+	default:
+		ret = -EINVAL;
+	}
+
+	mutex_unlock(&data->lock);
+	return ret;
+}
+
+static int envcombo_read_event_config(struct iio_dev *indio_dev,
+				       const struct iio_chan_spec *chan,
+				       enum iio_event_type type,
+				       enum iio_event_direction dir)
+{
+	struct envcombo_data *data = iio_priv(indio_dev);
+
+	switch (dir) {
+	case IIO_EV_DIR_RISING:
+		return data->ev_en_rising;
+	case IIO_EV_DIR_FALLING:
+		return data->ev_en_falling;
+	default:
+		return -EINVAL;
+	}
+}
+
+static int envcombo_write_event_config(struct iio_dev *indio_dev,
+					const struct iio_chan_spec *chan,
+					enum iio_event_type type,
+					enum iio_event_direction dir,
+					int state)
+{
+	struct envcombo_data *data = iio_priv(indio_dev);
+	int ret;
+
+	mutex_lock(&data->lock);
+
+	switch (dir) {
+	case IIO_EV_DIR_RISING:
+		data->ev_en_rising = !!state;
+		break;
+	case IIO_EV_DIR_FALLING:
+		data->ev_en_falling = !!state;
+		break;
+	default:
+		mutex_unlock(&data->lock);
+		return -EINVAL;
+	}
+
+	ret = envcombo_update_event_en(data);
+	mutex_unlock(&data->lock);
+
+	return ret;
+}
+
 static const struct iio_info envcombo_info = {
 	.read_raw = envcombo_read_raw,
 	.read_avail = envcombo_read_avail,
 	.write_raw = envcombo_write_raw,
 	.write_raw_get_fmt = envcombo_write_raw_get_fmt,
+	.read_event_value = envcombo_read_event_value,
+	.write_event_value = envcombo_write_event_value,
+	.read_event_config = envcombo_read_event_config,
+	.write_event_config = envcombo_write_event_config,
 };
 
 static irqreturn_t envcombo_irq_thread(int irq, void *private)
