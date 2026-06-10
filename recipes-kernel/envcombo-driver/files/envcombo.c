@@ -531,8 +531,11 @@ static irqreturn_t envcombo_irq_thread(int irq, void *private)
 	int status;
 
 	status = envcombo_read_reg(data->client, ENVCOMBO_REG_STATUS);
-	if (status < 0)
-		return IRQ_NONE;
+	if (status < 0) {
+		dev_warn_ratelimited(&data->client->dev,
+				      "failed to read STATUS: %d\n", status);
+		return IRQ_HANDLED;
+	}
 
 	if (status & ENVCOMBO_STATUS_ALS_RDY) {
 		complete(&data->als_done);
@@ -559,6 +562,11 @@ static irqreturn_t envcombo_irq_thread(int irq, void *private)
 	return IRQ_HANDLED;
 }
 
+static void envcombo_trigger_put(void *trig)
+{
+	iio_trigger_put(trig);
+}
+
 static int envcombo_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
@@ -566,7 +574,12 @@ static int envcombo_probe(struct i2c_client *client)
 	struct iio_dev *indio_dev;
 	int ret;
 
-	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C))
+	if (!client->irq)
+		return -EINVAL;
+
+	if (!i2c_check_functionality(client->adapter,
+				      I2C_FUNC_SMBUS_BYTE_DATA |
+				      I2C_FUNC_SMBUS_I2C_BLOCK))
 		return -EOPNOTSUPP;
 
 	indio_dev = devm_iio_device_alloc(dev, sizeof(*data));
@@ -650,13 +663,12 @@ static int envcombo_probe(struct i2c_client *client)
 		return ret;
 
 	indio_dev->trig = iio_trigger_get(data->trig);
-	ret = devm_add_action_or_reset(dev, (void (*)(void *))iio_trigger_put,
-				       indio_dev->trig);
+	ret = devm_add_action_or_reset(dev, envcombo_trigger_put, indio_dev->trig);
 	if (ret)
 		return ret;
 
 	ret = devm_iio_triggered_buffer_setup(dev, indio_dev, NULL,
-				       envcombo_trigger_handler, NULL);
+					       envcombo_trigger_handler, NULL);
 	if (ret)
 		return ret;
 
