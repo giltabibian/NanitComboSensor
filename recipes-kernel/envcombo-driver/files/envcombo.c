@@ -614,8 +614,7 @@ static int envcombo_probe(struct i2c_client *client)
 		return -EINVAL;
 
 	if (!i2c_check_functionality(client->adapter,
-				      I2C_FUNC_SMBUS_BYTE_DATA |
-				      I2C_FUNC_SMBUS_WORD_DATA))
+				      I2C_FUNC_SMBUS_BYTE_DATA))
 		return -EOPNOTSUPP;
 
 	indio_dev = devm_iio_device_alloc(dev, sizeof(*data));
