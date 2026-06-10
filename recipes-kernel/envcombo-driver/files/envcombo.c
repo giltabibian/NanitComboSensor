@@ -14,7 +14,6 @@
 #include <linux/jiffies.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
-#include <linux/regmap.h>
 
 #include <linux/iio/buffer.h>
 #include <linux/iio/events.h>
@@ -70,8 +69,59 @@ static const int envcombo_als_time_avail[] = {
 	0, 400000,
 };
 
+/*
+ * Plain i2c_smbus access: the device exposes only 19 byte-wide registers
+ * (with three 16-bit big-endian fields), so a full regmap isn't warranted.
+ * CONFIG_REGMAP_I2C is also a hidden Kconfig symbol with no prompt and can
+ * only be pulled in via "select" from another driver, which an out-of-tree
+ * module cannot do cleanly.
+ */
+static int envcombo_read_reg(struct i2c_client *client, u8 reg)
+{
+	return i2c_smbus_read_byte_data(client, reg);
+}
+
+static int envcombo_write_reg(struct i2c_client *client, u8 reg, u8 val)
+{
+	return i2c_smbus_write_byte_data(client, reg, val);
+}
+
+static int envcombo_update_bits(struct i2c_client *client, u8 reg, u8 mask, u8 val)
+{
+	int ret;
+
+	ret = envcombo_read_reg(client, reg);
+	if (ret < 0)
+		return ret;
+
+	return envcombo_write_reg(client, reg, (ret & ~mask) | (val & mask));
+}
+
+/* 16-bit big-endian register pair (MSB first). */
+static int envcombo_read_reg16(struct i2c_client *client, u8 reg, u16 *val)
+{
+	u8 buf[2];
+	int ret;
+
+	ret = i2c_smbus_read_i2c_block_data(client, reg, sizeof(buf), buf);
+	if (ret < 0)
+		return ret;
+	if (ret != sizeof(buf))
+		return -EIO;
+
+	*val = ((u16)buf[0] << 8) | buf[1];
+	return 0;
+}
+
+static int envcombo_write_reg16(struct i2c_client *client, u8 reg, u16 val)
+{
+	u8 buf[2] = { val >> 8, val & 0xFF };
+
+	return i2c_smbus_write_i2c_block_data(client, reg, sizeof(buf), buf);
+}
+
 struct envcombo_data {
-	struct regmap *regmap;
+	struct i2c_client *client;
 	struct mutex lock;
 	struct completion als_done;
 	struct iio_trigger *trig;
@@ -138,10 +188,10 @@ static int envcombo_update_power_mode(struct envcombo_data *data)
 	bool active = data->buffer_en || data->ev_en_rising ||
 		      data->ev_en_falling;
 
-	return regmap_update_bits(data->regmap, ENVCOMBO_REG_PWR_MODE,
-				   ENVCOMBO_PWR_MODE_MASK,
-				   active ? ENVCOMBO_PWR_CONTINUOUS :
-					    ENVCOMBO_PWR_SLEEP);
+	return envcombo_update_bits(data->client, ENVCOMBO_REG_PWR_MODE,
+				     ENVCOMBO_PWR_MODE_MASK,
+				     active ? ENVCOMBO_PWR_CONTINUOUS :
+					      ENVCOMBO_PWR_SLEEP);
 }
 
 /* Caller must hold data->lock. */
@@ -150,9 +200,9 @@ static int envcombo_update_event_en(struct envcombo_data *data)
 	int ret;
 
 	if (data->ev_en_rising || data->ev_en_falling) {
-		ret = regmap_update_bits(data->regmap, ENVCOMBO_REG_INT_CFG,
-					  ENVCOMBO_INT_CFG_EN,
-					  ENVCOMBO_INT_CFG_EN);
+		ret = envcombo_update_bits(data->client, ENVCOMBO_REG_INT_CFG,
+					    ENVCOMBO_INT_CFG_EN,
+					    ENVCOMBO_INT_CFG_EN);
 		if (ret)
 			return ret;
 	}
@@ -162,7 +212,7 @@ static int envcombo_update_event_en(struct envcombo_data *data)
 
 static int envcombo_read_als_raw(struct envcombo_data *data, int *val)
 {
-	u8 buf[2];
+	u16 light;
 	int ret;
 
 	mutex_lock(&data->lock);
@@ -170,9 +220,9 @@ static int envcombo_read_als_raw(struct envcombo_data *data, int *val)
 	if (!data->buffer_en && !data->ev_en_rising && !data->ev_en_falling) {
 		reinit_completion(&data->als_done);
 
-		ret = regmap_write(data->regmap, ENVCOMBO_REG_PWR_MODE,
-				    ENVCOMBO_PWR_ONE_SHOT);
-		if (ret)
+		ret = envcombo_write_reg(data->client, ENVCOMBO_REG_PWR_MODE,
+					  ENVCOMBO_PWR_ONE_SHOT);
+		if (ret < 0)
 			goto out_unlock;
 
 		if (!wait_for_completion_timeout(&data->als_done,
@@ -182,11 +232,11 @@ static int envcombo_read_als_raw(struct envcombo_data *data, int *val)
 		}
 	}
 
-	ret = regmap_bulk_read(data->regmap, ENVCOMBO_REG_ALS_MSB, buf, 2);
+	ret = envcombo_read_reg16(data->client, ENVCOMBO_REG_ALS_MSB, &light);
 	if (ret)
 		goto out_unlock;
 
-	*val = ((int)buf[0] << 8) | buf[1];
+	*val = light;
 	ret = 0;
 
 out_unlock:
@@ -279,9 +329,9 @@ static int envcombo_write_raw(struct iio_dev *indio_dev,
 			return -EINVAL;
 
 		mutex_lock(&data->lock);
-		ret = regmap_update_bits(data->regmap, ENVCOMBO_REG_CFG,
-					  ENVCOMBO_CFG_ALS_GAIN_MASK,
-					  FIELD_PREP(ENVCOMBO_CFG_ALS_GAIN_MASK, idx));
+		ret = envcombo_update_bits(data->client, ENVCOMBO_REG_CFG,
+					    ENVCOMBO_CFG_ALS_GAIN_MASK,
+					    FIELD_PREP(ENVCOMBO_CFG_ALS_GAIN_MASK, idx));
 		if (!ret)
 			data->als_gain_idx = idx;
 		mutex_unlock(&data->lock);
@@ -300,9 +350,9 @@ static int envcombo_write_raw(struct iio_dev *indio_dev,
 			return -EINVAL;
 
 		mutex_lock(&data->lock);
-		ret = regmap_update_bits(data->regmap, ENVCOMBO_REG_CFG,
-					  ENVCOMBO_CFG_ALS_TIME_MASK,
-					  FIELD_PREP(ENVCOMBO_CFG_ALS_TIME_MASK, idx));
+		ret = envcombo_update_bits(data->client, ENVCOMBO_REG_CFG,
+					    ENVCOMBO_CFG_ALS_TIME_MASK,
+					    FIELD_PREP(ENVCOMBO_CFG_ALS_TIME_MASK, idx));
 		if (!ret)
 			data->als_time_idx = idx;
 		mutex_unlock(&data->lock);
@@ -344,14 +394,10 @@ static int envcombo_write_event_value(struct iio_dev *indio_dev,
 				       int val, int val2)
 {
 	struct envcombo_data *data = iio_priv(indio_dev);
-	u8 buf[2];
 	int ret;
 
 	if (val < 0 || val > 0xFFFF)
 		return -EINVAL;
-
-	buf[0] = (val >> 8) & 0xFF;
-	buf[1] = val & 0xFF;
 
 	mutex_lock(&data->lock);
 
@@ -361,8 +407,8 @@ static int envcombo_write_event_value(struct iio_dev *indio_dev,
 			ret = -EINVAL;
 			break;
 		}
-		ret = regmap_bulk_write(data->regmap, ENVCOMBO_REG_ALS_TH_HIGH,
-					 buf, 2);
+		ret = envcombo_write_reg16(data->client, ENVCOMBO_REG_ALS_TH_HIGH,
+					    val);
 		if (!ret)
 			data->thresh_high = val;
 		break;
@@ -372,8 +418,8 @@ static int envcombo_write_event_value(struct iio_dev *indio_dev,
 			ret = -EINVAL;
 			break;
 		}
-		ret = regmap_bulk_write(data->regmap, ENVCOMBO_REG_ALS_TH_LOW,
-					 buf, 2);
+		ret = envcombo_write_reg16(data->client, ENVCOMBO_REG_ALS_TH_LOW,
+					    val);
 		if (!ret)
 			data->thresh_low = val;
 		break;
@@ -466,15 +512,13 @@ static irqreturn_t envcombo_trigger_handler(int irq, void *p)
 	struct iio_poll_func *pf = p;
 	struct iio_dev *indio_dev = pf->indio_dev;
 	struct envcombo_data *data = iio_priv(indio_dev);
-	u8 buf[2];
 	int ret;
 
-	ret = regmap_bulk_read(data->regmap, ENVCOMBO_REG_ALS_MSB, buf, 2);
-	if (!ret) {
-		data->scan.light = ((u16)buf[0] << 8) | buf[1];
+	ret = envcombo_read_reg16(data->client, ENVCOMBO_REG_ALS_MSB,
+				   &data->scan.light);
+	if (!ret)
 		iio_push_to_buffers_with_timestamp(indio_dev, &data->scan,
 						    iio_get_time_ns(indio_dev));
-	}
 
 	iio_trigger_notify_done(indio_dev->trig);
 
@@ -485,11 +529,10 @@ static irqreturn_t envcombo_irq_thread(int irq, void *private)
 {
 	struct iio_dev *indio_dev = private;
 	struct envcombo_data *data = iio_priv(indio_dev);
-	unsigned int status;
-	int ret;
+	int status;
 
-	ret = regmap_read(data->regmap, ENVCOMBO_REG_STATUS, &status);
-	if (ret)
+	status = envcombo_read_reg(data->client, ENVCOMBO_REG_STATUS);
+	if (status < 0)
 		return IRQ_NONE;
 
 	if (status & ENVCOMBO_STATUS_ALS_RDY) {
@@ -508,37 +551,29 @@ static irqreturn_t envcombo_irq_thread(int irq, void *private)
 	return IRQ_HANDLED;
 }
 
-static const struct regmap_config envcombo_regmap_config = {
-	.reg_bits = 8,
-	.val_bits = 8,
-	.max_register = ENVCOMBO_REG_PWR_MODE,
-	.cache_type = REGCACHE_NONE,
-};
-
 static int envcombo_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct envcombo_data *data;
 	struct iio_dev *indio_dev;
-	unsigned int val;
 	int ret;
+
+	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C))
+		return -EOPNOTSUPP;
 
 	indio_dev = devm_iio_device_alloc(dev, sizeof(*data));
 	if (!indio_dev)
 		return -ENOMEM;
 
 	data = iio_priv(indio_dev);
+	data->client = client;
 	mutex_init(&data->lock);
 	init_completion(&data->als_done);
 
-	data->regmap = devm_regmap_init_i2c(client, &envcombo_regmap_config);
-	if (IS_ERR(data->regmap))
-		return PTR_ERR(data->regmap);
-
-	ret = regmap_read(data->regmap, ENVCOMBO_REG_WHO_AM_I, &val);
-	if (ret)
+	ret = envcombo_read_reg(client, ENVCOMBO_REG_WHO_AM_I);
+	if (ret < 0)
 		return ret;
-	if (val != ENVCOMBO_WHO_AM_I_VAL)
+	if (ret != ENVCOMBO_WHO_AM_I_VAL)
 		return -ENODEV;
 
 	indio_dev->name = "envcombo";
@@ -547,15 +582,15 @@ static int envcombo_probe(struct i2c_client *client)
 	indio_dev->channels = envcombo_channels;
 	indio_dev->num_channels = ARRAY_SIZE(envcombo_channels);
 
-	ret = regmap_read(data->regmap, ENVCOMBO_REG_CAL_ALS_GAIN, &val);
-	if (ret)
+	ret = envcombo_read_reg(client, ENVCOMBO_REG_CAL_ALS_GAIN);
+	if (ret < 0)
 		return ret;
-	data->calib_again = val;
+	data->calib_again = ret;
 
-	ret = regmap_read(data->regmap, ENVCOMBO_REG_CAL_ALS_TIME, &val);
-	if (ret)
+	ret = envcombo_read_reg(client, ENVCOMBO_REG_CAL_ALS_TIME);
+	if (ret < 0)
 		return ret;
-	data->calib_atime = val;
+	data->calib_atime = ret;
 	if (data->calib_atime)
 		dev_warn(dev,
 			 "factory calibration overrides ALS integration time to %u ms; integration_time is read-only\n",
@@ -564,27 +599,25 @@ static int envcombo_probe(struct i2c_client *client)
 	data->als_gain_idx = ENVCOMBO_DEFAULT_GAIN_IDX;
 	data->als_time_idx = ENVCOMBO_DEFAULT_TIME_IDX;
 
-	ret = regmap_write(data->regmap, ENVCOMBO_REG_CFG,
-			    ENVCOMBO_CFG_ALS_EN |
-			    FIELD_PREP(ENVCOMBO_CFG_ALS_GAIN_MASK, data->als_gain_idx) |
-			    FIELD_PREP(ENVCOMBO_CFG_ALS_TIME_MASK, data->als_time_idx));
+	ret = envcombo_write_reg(client, ENVCOMBO_REG_CFG,
+				  ENVCOMBO_CFG_ALS_EN |
+				  FIELD_PREP(ENVCOMBO_CFG_ALS_GAIN_MASK, data->als_gain_idx) |
+				  FIELD_PREP(ENVCOMBO_CFG_ALS_TIME_MASK, data->als_time_idx));
 	if (ret)
 		return ret;
 
-	ret = regmap_write(data->regmap, ENVCOMBO_REG_INT_CFG,
-			    ENVCOMBO_INT_CFG_EN | ENVCOMBO_INT_CFG_LATCH);
+	ret = envcombo_write_reg(client, ENVCOMBO_REG_INT_CFG,
+				  ENVCOMBO_INT_CFG_EN | ENVCOMBO_INT_CFG_LATCH);
 	if (ret)
 		return ret;
 
 	/* POR defaults: thresholds span the full range, i.e. disabled. */
-	ret = regmap_bulk_write(data->regmap, ENVCOMBO_REG_ALS_TH_LOW,
-				 "\x00\x00", 2);
+	ret = envcombo_write_reg16(client, ENVCOMBO_REG_ALS_TH_LOW, 0x0000);
 	if (ret)
 		return ret;
 	data->thresh_low = 0x0000;
 
-	ret = regmap_bulk_write(data->regmap, ENVCOMBO_REG_ALS_TH_HIGH,
-				 "\xff\xff", 2);
+	ret = envcombo_write_reg16(client, ENVCOMBO_REG_ALS_TH_HIGH, 0xFFFF);
 	if (ret)
 		return ret;
 	data->thresh_high = 0xFFFF;
