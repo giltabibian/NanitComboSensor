@@ -16,8 +16,12 @@
 #include <linux/mutex.h>
 #include <linux/regmap.h>
 
+#include <linux/iio/buffer.h>
 #include <linux/iio/events.h>
 #include <linux/iio/iio.h>
+#include <linux/iio/trigger.h>
+#include <linux/iio/trigger_consumer.h>
+#include <linux/iio/triggered_buffer.h>
 
 #define ENVCOMBO_REG_WHO_AM_I	0x00
 #define ENVCOMBO_REG_ALS_MSB	0x04
@@ -70,6 +74,7 @@ struct envcombo_data {
 	struct regmap *regmap;
 	struct mutex lock;
 	struct completion als_done;
+	struct iio_trigger *trig;
 
 	u8 als_gain_idx;
 	u8 als_time_idx;
@@ -82,6 +87,11 @@ struct envcombo_data {
 	bool ev_en_rising;
 	bool ev_en_falling;
 	bool buffer_en;
+
+	struct {
+		u16 light;
+		s64 timestamp;
+	} scan __aligned(8);
 };
 
 static const struct iio_event_spec envcombo_als_event_specs[] = {
@@ -111,7 +121,15 @@ static const struct iio_chan_spec envcombo_channels[] = {
 				       BIT(IIO_CHAN_INFO_INT_TIME),
 		.event_spec = envcombo_als_event_specs,
 		.num_event_specs = ARRAY_SIZE(envcombo_als_event_specs),
+		.scan_index = 0,
+		.scan_type = {
+			.sign = 'u',
+			.realbits = 16,
+			.storagebits = 16,
+			.endianness = IIO_CPU,
+		},
 	},
+	IIO_CHAN_SOFT_TIMESTAMP(1),
 };
 
 /* Caller must hold data->lock. */
