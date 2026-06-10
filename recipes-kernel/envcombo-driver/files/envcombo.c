@@ -318,6 +318,20 @@ static int envcombo_probe(struct i2c_client *client)
 	indio_dev->channels = envcombo_channels;
 	indio_dev->num_channels = ARRAY_SIZE(envcombo_channels);
 
+	ret = regmap_read(data->regmap, ENVCOMBO_REG_CAL_ALS_GAIN, &val);
+	if (ret)
+		return ret;
+	data->calib_again = val;
+
+	ret = regmap_read(data->regmap, ENVCOMBO_REG_CAL_ALS_TIME, &val);
+	if (ret)
+		return ret;
+	data->calib_atime = val;
+	if (data->calib_atime)
+		dev_warn(dev,
+			 "factory calibration overrides ALS integration time to %u ms; integration_time is read-only\n",
+			 data->calib_atime);
+
 	data->als_gain_idx = ENVCOMBO_DEFAULT_GAIN_IDX;
 	data->als_time_idx = ENVCOMBO_DEFAULT_TIME_IDX;
 
