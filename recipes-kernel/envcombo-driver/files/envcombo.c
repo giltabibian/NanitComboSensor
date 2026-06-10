@@ -439,6 +439,13 @@ static irqreturn_t envcombo_irq_thread(int irq, void *private)
 	if (status & ENVCOMBO_STATUS_ALS_RDY)
 		complete(&data->als_done);
 
+	if (status & ENVCOMBO_STATUS_ALS_INT)
+		iio_push_event(indio_dev,
+			       IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
+						     IIO_EV_TYPE_THRESH,
+						     IIO_EV_DIR_EITHER),
+			       iio_get_time_ns(indio_dev));
+
 	return IRQ_HANDLED;
 }
 
@@ -509,6 +516,19 @@ static int envcombo_probe(struct i2c_client *client)
 			    ENVCOMBO_INT_CFG_EN | ENVCOMBO_INT_CFG_LATCH);
 	if (ret)
 		return ret;
+
+	/* POR defaults: thresholds span the full range, i.e. disabled. */
+	ret = regmap_bulk_write(data->regmap, ENVCOMBO_REG_ALS_TH_LOW,
+				 "\x00\x00", 2);
+	if (ret)
+		return ret;
+	data->thresh_low = 0x0000;
+
+	ret = regmap_bulk_write(data->regmap, ENVCOMBO_REG_ALS_TH_HIGH,
+				 "\xff\xff", 2);
+	if (ret)
+		return ret;
+	data->thresh_high = 0xFFFF;
 
 	ret = devm_request_threaded_irq(dev, client->irq, NULL,
 					 envcombo_irq_thread,
