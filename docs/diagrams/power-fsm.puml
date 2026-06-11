@@ -1,0 +1,42 @@
+@startuml power-fsm
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam state {
+  BackgroundColor #FDFDFD
+  BorderColor #444444
+}
+
+state "SLEEP (0x01)" as SLEEP
+state "ONE-SHOT (0x02)" as ONESHOT
+state "CONTINUOUS (0x03)" as CONT
+
+[*] --> SLEEP : power-on reset /\nend of probe
+
+SLEEP --> ONESHOT : sysfs read of in_illuminance_raw\nwhile idle (no buffer, no events)
+ONESHOT --> SLEEP : conversion done (HW auto-return):\nALS_OUT latched, ALS_RDY set, INT pulses
+
+SLEEP --> CONT : buffer enabled OR any\nthreshold event enabled
+CONT --> SLEEP : last consumer disabled\n(!buffer_en && !ev_en_rising && !ev_en_falling)
+
+note right of ONESHOT
+  Transient state, used only for
+  on-demand raw reads. Driver waits
+  on a completion signalled by the
+  IRQ thread (500 ms timeout).
+end note
+
+note right of CONT
+  Conversion every cycle (200 ms).
+  ALS_RDY each cycle, ALS_INT on
+  threshold crossings. Raw reads
+  skip ONE-SHOT and just read the
+  latched ALS_OUT.
+end note
+
+note left of SLEEP
+  Registers accessible,
+  no measurements, latched
+  ALS_OUT still readable.
+  OFF (0x00) is never used.
+end note
+@enduml

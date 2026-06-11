@@ -1,0 +1,27 @@
+@startuml system-overview
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam rectangle {
+  BackgroundColor #FDFDFD
+  BorderColor #444444
+}
+
+rectangle "Userspace" as US {
+  component "sysfs attributes\n(raw, scale, gain,\nint_time, thresholds)" as SYSFS
+  component "/dev/iio:deviceN\n(event fd, scan records)" as CHRDEV
+}
+
+rectangle "Kernel" as K {
+  component "IIO core\nchannels / events / trigger / kfifo buffer" as IIO
+  component "envcombo driver\npower-mode FSM | threaded IRQ | SMBus xfer" as DRV
+}
+
+component "i2c-envcombo-sim (or real HW)\nENV-COMBO device model @ 0x39" as HW
+
+SYSFS --> IIO
+CHRDEV --> IIO
+IIO --> DRV : read_raw / write_raw\nevent callbacks / trigger ops
+DRV --> HW : SMBus byte\nread/write
+HW --> DRV : INT pin\n(active-low)
+@enduml

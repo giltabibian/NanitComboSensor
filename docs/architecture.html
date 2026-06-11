@@ -479,6 +479,20 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 ENV-COMBO I2C combo sensor. Only the ambient-light (ALS, <code>IIO_LIGHT</code>) path is
 implemented; temperature and humidity are out of scope for this assignment.</p>
 </div>
+<div class="admonitionblock note">
+<table>
+<tr>
+<td class="icon">
+<div class="title">Note</div>
+</td>
+<td class="content">
+Diagrams are maintained as PlantUML sources in <code>docs/diagrams/<strong>.puml</code>
+and embedded as rendered SVGs. Regenerate after editing with
+<code>plantuml -tsvg docs/diagrams/</strong>.puml</code>.
+</td>
+</tr>
+</table>
+</div>
 </div>
 </div>
 <div class="sect1">
@@ -492,31 +506,9 @@ device, and delivers interrupts through a software IRQ domain. The driver is
 completely unaware of the simulator&#8201;&#8212;&#8201;it would bind unchanged to real
 hardware exposing the same register map.</p>
 </div>
-<div class="literalblock">
+<div class="imageblock">
 <div class="content">
-<pre>                userspace
-  +-----------------------------------------------+
-  |  sysfs attrs        /dev/iio:deviceN           |
-  |  (raw, scale,       (event fd via ioctl,       |
-  |   gain, int_time,    buffered scan records)    |
-  |   thresholds)                                  |
-  +-----------------------+------------------------+
-                          |
-  +-----------------------v------------------------+
-  |                   IIO core                      |
-  |   channels / events / trigger / kfifo buffer    |
-  +-----------------------+------------------------+
-                          |  read_raw/write_raw, event cbs,
-                          |  trigger ops, pollfunc
-  +-----------------------v------------------------+
-  |               envcombo driver                   |
-  |  power-mode FSM | threaded IRQ | i2c_smbus xfer |
-  +-----------+------------------------+-----------+
-              | SMBus byte read/write  | INT (active-low)
-  +-----------v------------------------+-----------+
-  |        i2c-envcombo-sim (or real HW)            |
-  |   ENV-COMBO device model @ 0x39, IRQ source     |
-  +-------------------------------------------------+</pre>
+<img src="diagrams/system-overview.svg" alt="System overview block diagram">
 </div>
 </div>
 </div>
@@ -687,27 +679,9 @@ currently active consumers. Three boolean inputs drive the FSM:
 target mode whenever any of them changes; ONE-SHOT is a transient state used
 only for on-demand raw reads while otherwise idle.</p>
 </div>
-<div class="literalblock">
+<div class="imageblock">
 <div class="content">
-<pre>                       sysfs read of in_illuminance_raw
-                       while idle (no buffer, no events)
-            +--------------------------------------------------+
-            |                                                  v
-       +---------+        conversion done:              +-----------+
-       |  SLEEP  |        HW latches ALS_OUT,           | ONE-SHOT  |
-       |  0x01   |&lt;------ sets ALS_RDY, auto-returns ---|   0x02    |
-       | (reset  |        to SLEEP                      | transient |
-       |  state) |                                      +-----------+
-       +---------+
-          |   ^
-          |   |  last consumer disabled
-          |   |  (!buffer_en &amp;&amp; !ev_en_rising &amp;&amp; !ev_en_falling)
-          |   |
-          v   |
-      +--------------+
-      |  CONTINUOUS  |   buffer enabled OR any threshold event enabled;
-      |     0x03     |   device converts every cycle (200 ms),
-      +--------------+   ALS_RDY (and possibly ALS_INT) each cycle</pre>
+<img src="diagrams/power-fsm.svg" alt="Power-mode state machine">
 </div>
 </div>
 <div class="paragraph">
@@ -723,29 +697,9 @@ cycle anyway.</p>
 <div class="sectionbody">
 <div class="sect2">
 <h3 id="_probe_initialization">4.1. Probe / initialization</h3>
-<div class="literalblock">
+<div class="imageblock">
 <div class="content">
-<pre>  envcombo_probe
-     |
-     |  reject if no IRQ wired / no SMBus byte-data support
-     |  devm_iio_device_alloc, init mutex + completion
-     |
-     |  WHO_AM_I == 0xEB ?  -- no --&gt; return -ENODEV
-     |
-     |  read CALIB_ALS_GAIN, CALIB_ALS_TIME (once)
-     |     calib_atime != 0 --&gt; dev_warn: integration_time is read-only
-     |
-     |  CFG       &lt;- ALS_EN | gain=x1 | time=200ms
-     |  INT_CFG   &lt;- INT_EN | INT_LATCH          (POL=0, active-low)
-     |  ALS_TH_LOW  &lt;- 0x0000,  ALS_TH_HIGH &lt;- 0xFFFF   (full range =
-     |                                  thresholds effectively disabled)
-     |  PWR_MODE  &lt;- SLEEP     (stay low-power until first consumer)
-     |
-     |  devm_request_threaded_irq (NULL primary, IRQF_TRIGGER_LOW|ONESHOT)
-     |  devm_iio_trigger_alloc/register  ("envcombo-devN")
-     |  devm_iio_triggered_buffer_setup  (pollfunc stores timestamp)
-     |  devm_iio_device_register
-     v</pre>
+<img src="diagrams/probe-flow.svg" alt="Probe / initialization flow">
 </div>
 </div>
 </div>
@@ -755,35 +709,10 @@ cycle anyway.</p>
 <p><code>cat /sys/bus/iio/devices/iio:deviceN/in_illuminance_raw</code> while no buffer or
 event is active:</p>
 </div>
-<div class="literalblock">
+<div class="imageblock">
 <div class="content">
-<pre> userspace            driver (read_raw)            IRQ thread          device
-    |                       |                          |                  |
-    |--- read raw ---------&gt;|                          |                  |
-    |                       | mutex_lock               |                  |
-    |                       | idle? yes                |                  |
-    |                       | reinit_completion        |                  |
-    |                       | PWR_MODE &lt;- ONE-SHOT ---------------------&gt;|
-    |                       |                          |   convert, latch |
-    |                       |                          |   ALS_OUT, set   |
-    |                       |                          |   ALS_RDY, auto  |
-    |                       |                          |   SLEEP, pulse   |
-    |                       |                          |&lt;----- INT ------ |
-    |                       |                          | read STATUS ----&gt;|
-    |                       |                          |  (clears, rearms)|
-    |                       |   complete(als_done)     |                  |
-    |                       |&lt;-------------------------|                  |
-    |                       | wait_for_completion done |                  |
-    |                       |   (500 ms timeout        |                  |
-    |                       |    -&gt; -ETIMEDOUT)        |                  |
-    |                       | read ALS_OUT MSB+LSB ---------------------&gt;|
-    |                       | mutex_unlock             |                  |
-    |&lt;---- value -----------|                          |                  |</pre>
+<img src="diagrams/raw-read-seq.svg" alt="On-demand raw read sequence">
 </div>
-</div>
-<div class="paragraph">
-<p>If CONTINUOUS is already active (buffer or events on), the function skips
-the ONE-SHOT/completion block and reads the latched ALS_OUT directly.</p>
 </div>
 </div>
 <div class="sect2">
@@ -794,28 +723,9 @@ and/or <code>in_illuminance_thresh_falling_value</code> (&#8594; ALS_TH_LOW), th
 <code>&#8230;&#8203;_thresh_rising_en</code> / <code>&#8230;&#8203;_thresh_falling_en</code>. Enabling either event sets
 <code>INT_CFG.INT_EN</code> and drives the FSM to CONTINUOUS.</p>
 </div>
-<div class="literalblock">
+<div class="imageblock">
 <div class="content">
-<pre> device (CONTINUOUS)            IRQ thread                       userspace
-    |                               |                                 |
-    | conversion crosses threshold  |                                 |
-    | (in-range -&gt; out-of-range):   |                                 |
-    | ALS_RDY=1, ALS_INT=1,         |                                 |
-    | INT pulses                    |                                 |
-    |------------------------------&gt;|                                 |
-    |                               | read STATUS (clears + rearms)   |
-    |              ALS_RDY: complete(als_done);                       |
-    |                       buffer_en? -&gt; iio_trigger_poll            |
-    |              ALS_INT: read ALS_OUT, compare with                |
-    |                       shadowed thresholds to recover            |
-    |                       the direction the HW doesn't report:      |
-    |                               |                                 |
-    |                value &gt;= thresh_high &amp;&amp; rising_en                |
-    |                  -&gt; iio_push_event(THRESH, RISING) ------------&gt;| event fd
-    |                value &lt;= thresh_low &amp;&amp; falling_en                | (POLLIN,
-    |                  -&gt; iio_push_event(THRESH, FALLING) -----------&gt;|  read
-    |                otherwise: value already back in range           |  iio_event_data)
-    |                  -&gt; event dropped, not misreported              |</pre>
+<img src="diagrams/event-flow-seq.svg" alt="Threshold event delivery sequence">
 </div>
 </div>
 <div class="paragraph">
@@ -839,36 +749,10 @@ well-formed.</p>
 needed. Enabling the buffer drives the FSM to CONTINUOUS, and every
 conversion produces one scan record.</p>
 </div>
-<div class="literalblock">
+<div class="imageblock">
 <div class="content">
-<pre> userspace: scan_elements/in_illuminance_en=1 ; buffer/enable=1
-    |
-    v
- IIO core -&gt; set_trigger_state(enable=1)
-                |  buffer_en = true; FSM -&gt; CONTINUOUS
-                v
- device: conversion every 200 ms, ALS_RDY=1, INT pulses
-                |
-                v
- IRQ thread: read STATUS; ALS_RDY &amp;&amp; buffer_en -&gt; iio_trigger_poll(trig)
-                |
-                v
- pollfunc top half: timestamp = iio_get_time_ns()
-                |
-                v
- envcombo_trigger_handler (bottom half):
-     read ALS_OUT MSB+LSB -&gt; scan.light
-     iio_push_to_buffers_with_timestamp(scan, pf-&gt;timestamp)
-     iio_trigger_notify_done
-                |
-                v
- userspace: read /dev/iio:deviceN
-     record: [ u16 light | 6B pad | s64 timestamp ]  (16 bytes)</pre>
+<img src="diagrams/buffer-flow-seq.svg" alt="Triggered buffer capture sequence">
 </div>
-</div>
-<div class="paragraph">
-<p>Disabling the buffer calls <code>set_trigger_state(0)</code>; if no events are enabled
-either, the FSM returns the device to SLEEP.</p>
 </div>
 </div>
 </div>
@@ -1053,7 +937,7 @@ the correct state to leave behind on unbind.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-11 11:38:39 +0300
+Last updated 2026-06-11 13:51:17 +0300
 </div>
 </div>
 </body>
