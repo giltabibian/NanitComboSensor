@@ -1,0 +1,48 @@
+@startuml event-flow-seq
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam sequence {
+  ParticipantBackgroundColor #FDFDFD
+  ParticipantBorderColor #444444
+  LifeLineBorderColor #888888
+}
+
+actor Userspace as US
+participant "IIO core" as IIO
+participant "envcombo driver" as DRV
+participant "IRQ thread" as IRQ
+participant "ENV-COMBO\ndevice (CONTINUOUS)" as HW
+
+== Configuration ==
+US -> IIO : write thresh_rising_value /\nthresh_falling_value
+IIO -> DRV : write_event_value
+DRV -> HW : ALS_TH_HIGH / ALS_TH_LOW\n(validated: rising >= falling)
+US -> IIO : write thresh_*_en = 1
+IIO -> DRV : write_event_config
+DRV -> HW : INT_CFG.INT_EN <- 1\nPWR_MODE <- CONTINUOUS
+US -> US : open /dev/iio:deviceN,\nioctl(IIO_GET_EVENT_FD_IOCTL),\npoll(event_fd)
+
+== Crossing detected ==
+HW -> HW : conversion crosses threshold\n(in-range -> out-of-range):\nALS_RDY=1, ALS_INT=1
+HW -> IRQ : INT pulse
+activate IRQ
+IRQ -> HW : read STATUS (clears + re-arms)
+note right of IRQ : ALS_RDY also serviced from\nthe same read (completion /\nbuffer trigger if active)
+IRQ -> HW : read ALS_OUT
+note over IRQ
+  HW reports only "a threshold was
+  crossed" -- direction recovered by
+  comparing the sample against the
+  shadowed thresholds:
+end note
+alt value >= thresh_high && rising_en
+  IRQ -> IIO : iio_push_event(THRESH, RISING)
+  IIO --> US : POLLIN -> read iio_event_data
+else value <= thresh_low && falling_en
+  IRQ -> IIO : iio_push_event(THRESH, FALLING)
+  IIO --> US : POLLIN -> read iio_event_data
+else value already back in range
+  IRQ -> IRQ : event dropped,\nnot misreported
+end
+deactivate IRQ
+@enduml

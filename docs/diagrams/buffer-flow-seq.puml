@@ -1,0 +1,41 @@
+@startuml buffer-flow-seq
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam sequence {
+  ParticipantBackgroundColor #FDFDFD
+  ParticipantBorderColor #444444
+  LifeLineBorderColor #888888
+}
+
+actor Userspace as US
+participant "IIO core" as IIO
+participant "envcombo driver" as DRV
+participant "IRQ thread" as IRQ
+participant "ENV-COMBO\ndevice" as HW
+
+== Enable ==
+US -> IIO : scan_elements/in_illuminance_en = 1\nbuffer/enable = 1
+IIO -> DRV : set_trigger_state(enable=1)
+DRV -> HW : buffer_en = true\nPWR_MODE <- CONTINUOUS
+
+== Each conversion cycle (200 ms) ==
+HW -> HW : convert, latch ALS_OUT,\nALS_RDY = 1
+HW -> IRQ : INT pulse
+activate IRQ
+IRQ -> HW : read STATUS (clears + re-arms)
+IRQ -> IIO : ALS_RDY && buffer_en ->\niio_trigger_poll(trig)
+deactivate IRQ
+IIO -> IIO : pollfunc top half:\ntimestamp = iio_get_time_ns()
+IIO -> DRV : envcombo_trigger_handler (bottom half)
+activate DRV
+DRV -> HW : read ALS_OUT MSB+LSB
+DRV -> IIO : iio_push_to_buffers_with_timestamp\n(scan, pf->timestamp)
+DRV -> IIO : iio_trigger_notify_done
+deactivate DRV
+IIO --> US : read /dev/iio:deviceN:\n[ u16 light | 6 B pad | s64 timestamp ] = 16 B
+
+== Disable ==
+US -> IIO : buffer/enable = 0
+IIO -> DRV : set_trigger_state(enable=0)
+DRV -> HW : buffer_en = false\nno events enabled -> PWR_MODE <- SLEEP
+@enduml

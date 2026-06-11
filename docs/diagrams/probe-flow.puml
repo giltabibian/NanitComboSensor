@@ -1,0 +1,40 @@
+@startuml probe-flow
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam activity {
+  BackgroundColor #FDFDFD
+  BorderColor #444444
+}
+
+start
+:check client->irq wired and
+SMBus byte-data functionality;
+:devm_iio_device_alloc
+init mutex + completion;
+if (WHO_AM_I == 0xEB ?) then (yes)
+else (no)
+  :return -ENODEV;
+  stop
+endif
+:read CALIB_ALS_GAIN, CALIB_ALS_TIME (once);
+if (CALIB_ALS_TIME != 0 ?) then (yes)
+  :dev_warn: integration_time
+  is factory-overridden, read-only;
+else (no)
+endif
+:CFG <- ALS_EN | gain x1 | time 200 ms;
+:INT_CFG <- INT_EN | INT_LATCH (POL=0, active-low);
+:ALS_TH_LOW <- 0x0000
+ALS_TH_HIGH <- 0xFFFF
+(full range = thresholds disabled);
+:PWR_MODE <- SLEEP
+(stay low-power until first consumer);
+:devm_request_threaded_irq
+(NULL primary, IRQF_TRIGGER_LOW | ONESHOT);
+:devm_iio_trigger_alloc + register
+("envcombo-devN");
+:devm_iio_triggered_buffer_setup
+(pollfunc stores timestamp);
+:devm_iio_device_register;
+stop
+@enduml

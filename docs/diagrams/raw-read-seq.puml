@@ -1,0 +1,42 @@
+@startuml raw-read-seq
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam sequence {
+  ParticipantBackgroundColor #FDFDFD
+  ParticipantBorderColor #444444
+  LifeLineBorderColor #888888
+}
+
+actor Userspace as US
+participant "envcombo driver\n(read_raw)" as DRV
+participant "IRQ thread" as IRQ
+participant "ENV-COMBO\ndevice" as HW
+
+US -> DRV : read in_illuminance_raw
+activate DRV
+DRV -> DRV : mutex_lock
+note over DRV : idle? (no buffer,\nno events active)
+DRV -> DRV : reinit_completion(als_done)
+DRV -> HW : PWR_MODE <- ONE-SHOT
+DRV -> DRV : wait_for_completion_timeout\n(500 ms, else -ETIMEDOUT)
+
+HW -> HW : convert, latch ALS_OUT,\nset ALS_RDY, auto-return to SLEEP
+HW -> IRQ : INT pulse (active-low)
+activate IRQ
+IRQ -> HW : read STATUS
+note right : clears all bits,\nre-arms interrupt
+IRQ -> DRV : complete(als_done)
+deactivate IRQ
+
+DRV -> HW : read ALS_OUT MSB
+DRV -> HW : read ALS_OUT LSB
+DRV -> DRV : mutex_unlock
+DRV --> US : raw value
+deactivate DRV
+
+note over US, HW
+  If CONTINUOUS is already active (buffer or events enabled),
+  the ONE-SHOT/completion block is skipped and the latched
+  ALS_OUT is read directly -- it is refreshed every cycle anyway.
+end note
+@enduml

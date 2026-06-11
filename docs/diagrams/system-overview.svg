@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" contentScriptType="application/ecmascript" contentStyleType="text/css" height="567px" preserveAspectRatio="none" style="width:479px;height:567px;" version="1.1" viewBox="0 0 479 567" width="479px" zoomAndPan="magnify"><defs/><g><!--MD5=[0d3fb2cf91c0c13773a5e9df62683e6c]
+cluster US--><rect fill="#FDFDFD" height="120" style="stroke: #444444; stroke-width: 1.5;" width="413" x="55" y="24"/><text fill="#000000" font-family="Helvetica" font-size="14" font-weight="bold" lengthAdjust="spacingAndGlyphs" textLength="84" x="219.5" y="38.9951">Userspace</text><!--MD5=[cddc6333dd86b1849aefe74cad8919f8]
+cluster K--><rect fill="#FDFDFD" height="249" style="stroke: #444444; stroke-width: 1.5;" width="368" x="22" y="177"/><text fill="#000000" font-family="Helvetica" font-size="14" font-weight="bold" lengthAdjust="spacingAndGlyphs" textLength="52" x="180" y="191.9951">Kernel</text><!--MD5=[54ed4e15c7a9c1552342d8d9b6a9c674]
+entity SYSFS--><rect fill="#FEFECE" height="68.8906" style="stroke: #A80036; stroke-width: 1.5;" width="161" x="71.5" y="59"/><rect fill="#FEFECE" height="5" style="stroke: #A80036; stroke-width: 1.5;" width="10" x="66.5" y="64"/><rect fill="#FEFECE" height="5" style="stroke: #A80036; stroke-width: 1.5;" width="10" x="66.5" y="117.8906"/><text fill="#000000" font-family="Helvetica" font-size="14" lengthAdjust="spacingAndGlyphs" textLength="105" x="81.5" y="81.9951">sysfs attributes</text><text fill="#000000" font-family="Helvetica" font-size="14" lengthAdjust="spacingAndGlyphs" textLength="114" x="81.5" y="98.292">(raw, scale, gain,</text><text fill="#000000" font-family="Helvetica" font-size="14" lengthAdjust="spacingAndGlyphs" textLength="141" x="81.5" y="114.5889">int_time, thresholds)</text><!--MD5=[6372b19f980b052046c02f0b78a12ee9]
+entity CHRDEV--><rect fill="#FEFECE" height="52.5938" style="stroke: #A80036; stroke-width: 1.5;" width="184" x="268" y="67"/><rect fill="#FEFECE" height="5" style="stroke: #A80036; stroke-width: 1.5;" width="10" x="263" y="72"/><rect fill="#FEFECE" height="5" style="stroke: #A80036; stroke-width: 1.5;" width="10" x="263" y="109.5938"/><text fill="#000000" font-family="Helvetica" font-size="14" lengthAdjust="spacingAndGlyphs" textLength="110" x="278" y="89.9951">/dev/iio:deviceN</text><text fill="#000000" font-family="Helvetica" font-size="14" lengthAdjust="spacingAndGlyphs" textLength="164" x="278" y="106.292">(event fd, scan records)</text><!--MD5=[7c23aa18fa4e20eb6472b74cf49fd4bd]
+entity IIO--><rect fill="#FEFECE" height="52.5938" style="stroke: #A80036; stroke-width: 1.5;" width="286" x="50" y="212"/><rect fill="#FEFECE" height="5" style="stroke: #A80036; stroke-width: 1.5;" width="10" x="45" y="217"/><rect fill="#FEFECE" height="5" style="stroke: #A80036; stroke-width: 1.5;" width="10" x="45" y="254.5938"/><text fill="#000000" font-family="Helvetica" font-size="14" lengthAdjust="spacingAndGlyphs" textLength="52" x="60" y="234.9951">IIO core</text><text fill="#000000" font-family="Helvetica" font-size="14" lengthAdjust="spacingAndGlyphs" textLength="266" x="60" y="251.292">channels / events / trigger / kfifo buffer</text><!--MD5=[1324df49e69def124063fed67b04b3c4]
+entity DRV--><rect fill="#FEFECE" height="52.5938" style="stroke: #A80036; stroke-width: 1.5;" width="335" x="38.5" y="357"/><rect fill="#FEFECE" height="5" style="stroke: #A80036; stroke-width: 1.5;" width="10" x="33.5" y="362"/><rect fill="#FEFECE" height="5" style="stroke: #A80036; stroke-width: 1.5;" width="10" x="33.5" y="399.5938"/><text fill="#000000" font-family="Helvetica" font-size="14" lengthAdjust="spacingAndGlyphs" textLength="115" x="48.5" y="379.9951">envcombo driver</text><text fill="#000000" font-family="Helvetica" font-size="14" lengthAdjust="spacingAndGlyphs" textLength="315" x="48.5" y="396.292">power-mode FSM | threaded IRQ | SMBus xfer</text><!--MD5=[0c115fbe6776d76edb00007f346e8b2d]
+entity HW--><rect fill="#FEFECE" height="52.5938" style="stroke: #A80036; stroke-width: 1.5;" width="259" x="75.5" y="504"/><rect fill="#FEFECE" height="5" style="stroke: #A80036; stroke-width: 1.5;" width="10" x="70.5" y="509"/><rect fill="#FEFECE" height="5" style="stroke: #A80036; stroke-width: 1.5;" width="10" x="70.5" y="546.5938"/><text fill="#000000" font-family="Helvetica" font-size="14" lengthAdjust="spacingAndGlyphs" textLength="211" x="85.5" y="526.9951">i2c-envcombo-sim (or real HW)</text><text fill="#000000" font-family="Helvetica" font-size="14" lengthAdjust="spacingAndGlyphs" textLength="239" x="85.5" y="543.292">ENV-COMBO device model @ 0x39</text><!--MD5=[996a59ff7eee96d52e629bbf2ec839bc]
+link SYSFS to IIO--><path d="M161.61,128.03 C168.46,151.92 177.6,183.78 184.25,206.97 " fill="none" id="SYSFS-&gt;IIO" style="stroke: #A80036; stroke-width: 1.0;"/><polygon fill="#A80036" points="185.62,211.78,187.0013,202.0285,184.2502,206.9713,179.3073,204.2202,185.62,211.78" style="stroke: #A80036; stroke-width: 1.0;"/><!--MD5=[f3dc12edcb86c4c63e458a202cfaaf49]
+link CHRDEV to IIO--><path d="M330.14,120.07 C301.14,144.9 257.17,182.55 226.87,208.49 " fill="none" id="CHRDEV-&gt;IIO" style="stroke: #A80036; stroke-width: 1.0;"/><polygon fill="#A80036" points="222.88,211.92,232.3226,209.1204,226.6833,208.6743,227.1294,203.0351,222.88,211.92" style="stroke: #A80036; stroke-width: 1.0;"/><!--MD5=[153c9a68f3311ae1985d928723a5577f]
+link IIO to DRV--><path d="M195.32,265.07 C197.53,289.32 200.84,325.79 203.2,351.65 " fill="none" id="IIO-&gt;DRV" style="stroke: #A80036; stroke-width: 1.0;"/><polygon fill="#A80036" points="203.65,356.67,206.8357,347.3506,203.2064,351.6897,198.8672,348.0604,203.65,356.67" style="stroke: #A80036; stroke-width: 1.0;"/><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="129" x="226" y="308.0669">read_raw / write_raw</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="179" x="201" y="323.1997">event callbacks / trigger ops</text><!--MD5=[ed5577a8155244d910d80761c7aeab40]
+link DRV to HW--><path d="M215.86,410.15 C219.14,419.96 222.37,431.35 224,442 C226.15,456.06 226.33,459.97 224,474 C222.62,482.32 220.14,491.06 217.42,499.09 " fill="none" id="DRV-&gt;HW" style="stroke: #A80036; stroke-width: 1.0;"/><polygon fill="#A80036" points="215.7,503.98,222.4583,496.8158,217.3581,499.2629,214.911,494.1628,215.7,503.98" style="stroke: #A80036; stroke-width: 1.0;"/><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="76" x="226" y="455.0669">SMBus byte</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="63" x="232.5" y="470.1997">read/write</text><!--MD5=[2cf07bb1493cf844de506f90b91160b5]
+link HW to DRV--><path d="M164.76,503.8 C155.2,495.54 146.25,485.51 141,474 C135.09,461.06 135.16,454.97 141,442 C145.87,431.18 153.9,421.58 162.68,413.47 " fill="none" id="HW-&gt;DRV" style="stroke: #A80036; stroke-width: 1.0;"/><polygon fill="#A80036" points="166.48,410.08,157.1023,413.0897,162.7501,413.4098,162.4299,419.0576,166.48,410.08" style="stroke: #A80036; stroke-width: 1.0;"/><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="43" x="157" y="455.0669">INT pin</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="73" x="142" y="470.1997">(active-low)</text><!--MD5=[3027f94f330feefe122dadd2fa53fddc]
+@startuml system-overview
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam rectangle {
+  BackgroundColor #FDFDFD
+  BorderColor #444444
+}
+
+rectangle "Userspace" as US {
+  component "sysfs attributes\n(raw, scale, gain,\nint_time, thresholds)" as SYSFS
+  component "/dev/iio:deviceN\n(event fd, scan records)" as CHRDEV
+}
+
+rectangle "Kernel" as K {
+  component "IIO core\nchannels / events / trigger / kfifo buffer" as IIO
+  component "envcombo driver\npower-mode FSM | threaded IRQ | SMBus xfer" as DRV
+}
+
+component "i2c-envcombo-sim (or real HW)\nENV-COMBO device model @ 0x39" as HW
+
+SYSFS - -> IIO
+CHRDEV - -> IIO
+IIO - -> DRV : read_raw / write_raw\nevent callbacks / trigger ops
+DRV - -> HW : SMBus byte\nread/write
+HW - -> DRV : INT pin\n(active-low)
+@enduml
+
+PlantUML version 1.2020.02(Sun Mar 01 12:22:07 IST 2020)
+(GPL source distribution)
+Java Runtime: OpenJDK Runtime Environment
+JVM: OpenJDK 64-Bit Server VM
+Java Version: 11.0.31+11-post-1ubuntu1-22.04.2-Ubuntu
+Operating System: Linux
+Default Encoding: UTF-8
+Language: en
+Country: US
+--></g></svg>
