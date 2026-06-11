@@ -1,0 +1,381 @@
+= ENV-COMBO IIO Driver -- Architecture & Design
+:toc:
+:toclevels: 2
+:sectnums:
+
+This document describes the architecture of the `envcombo` Linux IIO driver
+(`recipes-kernel/envcombo-driver/files/envcombo.c`) for the fictional
+ENV-COMBO I2C combo sensor. Only the ambient-light (ALS, `IIO_LIGHT`) path is
+implemented; temperature and humidity are out of scope for this assignment.
+
+== System Overview
+
+The driver sits between the IIO core and an I2C device at address `0x39`.
+In this project the device is provided by a simulator module
+(`i2c-envcombo-sim`) that registers both the I2C adapter and the client
+device, and delivers interrupts through a software IRQ domain. The driver is
+completely unaware of the simulator -- it would bind unchanged to real
+hardware exposing the same register map.
+
+....
+                userspace
+  +-----------------------------------------------+
+  |  sysfs attrs        /dev/iio:deviceN           |
+  |  (raw, scale,       (event fd via ioctl,       |
+  |   gain, int_time,    buffered scan records)    |
+  |   thresholds)                                  |
+  +-----------------------+------------------------+
+                          |
+  +-----------------------v------------------------+
+  |                   IIO core                      |
+  |   channels / events / trigger / kfifo buffer    |
+  +-----------------------+------------------------+
+                          |  read_raw/write_raw, event cbs,
+                          |  trigger ops, pollfunc
+  +-----------------------v------------------------+
+  |               envcombo driver                   |
+  |  power-mode FSM | threaded IRQ | i2c_smbus xfer |
+  +-----------+------------------------+-----------+
+              | SMBus byte read/write  | INT (active-low)
+  +-----------v------------------------+-----------+
+  |        i2c-envcombo-sim (or real HW)            |
+  |   ENV-COMBO device model @ 0x39, IRQ source     |
+  +-------------------------------------------------+
+....
+
+== Hardware Model (ALS-relevant subset)
+
+=== Register map
+
+[cols="1,2,4", options="header"]
+|===
+| Addr | Register | Use by this driver
+
+| 0x00 | WHO_AM_I | Identity check at probe; must read `0xEB`, else `-ENODEV`
+| 0x04-0x05 | ALS_OUT (MSB/LSB) | Latched 16-bit big-endian ALS result
+| 0x06 | CFG | `ALS_EN` (bit 7), `ALS_GAIN` (bits 4:3), `ALS_TIME` (bits 2:1)
+| 0x07 | INT_CFG | `INT_EN` (bit 7), `INT_LATCH` (bit 6), `INT_POL` (bit 5)
+| 0x08-0x09 | ALS_TH_LOW (MSB/LSB) | Falling threshold (alert when value goes below)
+| 0x0A-0x0B | ALS_TH_HIGH (MSB/LSB) | Rising threshold (alert when value goes above)
+| 0x0C | STATUS | `ALS_RDY` (bit 3), `ALS_INT` (bit 0); *all bits clear on read*
+| 0x10 | CALIB_ALS_GAIN | Factory gain trim, multiplies effective gain
+| 0x11 | CALIB_ALS_TIME | Factory integration-time override (ms); non-zero = override
+| 0x12 | PWR_MODE | OFF `0x00` / SLEEP `0x01` / ONE-SHOT `0x02` / CONTINUOUS `0x03`
+|===
+
+All 16-bit fields are big-endian register pairs: MSB at the base address,
+LSB at base + 1. The driver accesses them with two SMBus byte transfers
+(`envcombo_read_reg16()` / `envcombo_write_reg16()`).
+
+=== Device behavior (per datasheet)
+
+Power modes::
+The device powers up in SLEEP: registers are accessible but no measurements
+run. Writing ONE-SHOT triggers a single conversion; on completion the result
+is latched into ALS_OUT, `ALS_RDY` is set, and the device *returns to SLEEP
+automatically*. CONTINUOUS runs periodic conversions (200 ms cycle in the
+simulator). OFF halts all activity; the driver never uses it, since SLEEP
+already takes no measurements while keeping latched values readable.
+
+STATUS semantics::
+All STATUS bits are cleared by a read, which also re-arms the interrupt.
+`ALS_RDY` means a new conversion result since the last STATUS read.
+`ALS_INT` flags a threshold *crossing* -- a transition from in-range to
+out-of-range. It does not re-fire while the value stays out of range; the
+value must return in-range first. A crossing always coincides with new data
+(`ALS_RDY`), but the two flags are distinct.
+
+Interrupt pin::
+The INT pin pulses whenever any STATUS bit transitions 0 -> 1, with polarity
+selected by `INT_POL` (0 = active-low, the power-on default). `INT_LATCH=1`
+keeps `ALS_INT` set until STATUS is read even if the value returns in-range;
+with `INT_LATCH=0` the flag self-clears, which can lose events (see
+<<design-decisions>>).
+
+== Driver Architecture
+
+=== Components and state
+
+....
+  struct envcombo_data
+  +--------------------------------------------------------------+
+  | client            i2c_client for SMBus byte access           |
+  | lock              mutex: serializes config & one-shot reads  |
+  | als_done          completion: IRQ thread -> raw-read waiter   |
+  | trig              IIO trigger, fired from the IRQ thread     |
+  | als_gain_idx/als_time_idx   shadow of CFG gain/time fields   |
+  | calib_again/calib_atime     factory trim, read once at probe |
+  | thresh_low/thresh_high      shadow of ALS_TH_LOW/HIGH        |
+  | ev_en_rising/ev_en_falling  event-enable state (sysfs)       |
+  | buffer_en                   trigger/buffer active            |
+  | scan { u16 light; s64 timestamp } __aligned(8)               |
+  +--------------------------------------------------------------+
+....
+
+Locking model:
+
+* `data->lock` (mutex) protects all configuration paths (sysfs writes,
+  power-mode changes) and the one-shot raw-read sequence.
+* The threaded IRQ handler deliberately does *not* take the mutex: a raw
+  read can hold it for up to 500 ms while waiting on the completion, and
+  blocking the handler would delay re-arming the interrupt. Instead the
+  handler snapshots `ev_en_*` / `thresh_*` / `buffer_en` with `READ_ONCE()`,
+  paired with `WRITE_ONCE()` on the sysfs write side.
+* All resources are `devm_`-managed; the driver has no `.remove()`.
+
+=== Power-mode state machine
+
+The driver keeps the device in the lowest power state that satisfies the
+currently active consumers. Three boolean inputs drive the FSM:
+`buffer_en` (triggered buffer running), `ev_en_rising`, `ev_en_falling`
+(threshold events enabled). `envcombo_update_power_mode()` recomputes the
+target mode whenever any of them changes; ONE-SHOT is a transient state used
+only for on-demand raw reads while otherwise idle.
+
+....
+                       sysfs read of in_illuminance_raw
+                       while idle (no buffer, no events)
+            +--------------------------------------------------+
+            |                                                  v
+       +---------+        conversion done:              +-----------+
+       |  SLEEP  |        HW latches ALS_OUT,           | ONE-SHOT  |
+       |  0x01   |<------ sets ALS_RDY, auto-returns ---|   0x02    |
+       | (reset  |        to SLEEP                      | transient |
+       |  state) |                                      +-----------+
+       +---------+
+          |   ^
+          |   |  last consumer disabled
+          |   |  (!buffer_en && !ev_en_rising && !ev_en_falling)
+          |   |
+          v   |
+      +--------------+
+      |  CONTINUOUS  |   buffer enabled OR any threshold event enabled;
+      |     0x03     |   device converts every cycle (200 ms),
+      +--------------+   ALS_RDY (and possibly ALS_INT) each cycle
+....
+
+While CONTINUOUS is active, a sysfs raw read skips the ONE-SHOT round-trip
+and simply reads the latched ALS_OUT registers -- they are refreshed every
+cycle anyway.
+
+== ALS Usage Flows
+
+=== Probe / initialization
+
+....
+  envcombo_probe
+     |
+     |  reject if no IRQ wired / no SMBus byte-data support
+     |  devm_iio_device_alloc, init mutex + completion
+     |
+     |  WHO_AM_I == 0xEB ?  -- no --> return -ENODEV
+     |
+     |  read CALIB_ALS_GAIN, CALIB_ALS_TIME (once)
+     |     calib_atime != 0 --> dev_warn: integration_time is read-only
+     |
+     |  CFG       <- ALS_EN | gain=x1 | time=200ms
+     |  INT_CFG   <- INT_EN | INT_LATCH          (POL=0, active-low)
+     |  ALS_TH_LOW  <- 0x0000,  ALS_TH_HIGH <- 0xFFFF   (full range =
+     |                                  thresholds effectively disabled)
+     |  PWR_MODE  <- SLEEP     (stay low-power until first consumer)
+     |
+     |  devm_request_threaded_irq (NULL primary, IRQF_TRIGGER_LOW|ONESHOT)
+     |  devm_iio_trigger_alloc/register  ("envcombo-devN")
+     |  devm_iio_triggered_buffer_setup  (pollfunc stores timestamp)
+     |  devm_iio_device_register
+     v
+....
+
+=== On-demand raw read (one-shot path)
+
+`cat /sys/bus/iio/devices/iio:deviceN/in_illuminance_raw` while no buffer or
+event is active:
+
+....
+ userspace            driver (read_raw)            IRQ thread          device
+    |                       |                          |                  |
+    |--- read raw --------->|                          |                  |
+    |                       | mutex_lock               |                  |
+    |                       | idle? yes                |                  |
+    |                       | reinit_completion        |                  |
+    |                       | PWR_MODE <- ONE-SHOT --------------------->|
+    |                       |                          |   convert, latch |
+    |                       |                          |   ALS_OUT, set   |
+    |                       |                          |   ALS_RDY, auto  |
+    |                       |                          |   SLEEP, pulse   |
+    |                       |                          |<----- INT ------ |
+    |                       |                          | read STATUS ---->|
+    |                       |                          |  (clears, rearms)|
+    |                       |   complete(als_done)     |                  |
+    |                       |<-------------------------|                  |
+    |                       | wait_for_completion done |                  |
+    |                       |   (500 ms timeout        |                  |
+    |                       |    -> -ETIMEDOUT)        |                  |
+    |                       | read ALS_OUT MSB+LSB --------------------->|
+    |                       | mutex_unlock             |                  |
+    |<---- value -----------|                          |                  |
+....
+
+If CONTINUOUS is already active (buffer or events on), the function skips
+the ONE-SHOT/completion block and reads the latched ALS_OUT directly.
+
+=== Threshold event flow
+
+Userspace configures `in_illuminance_thresh_rising_value` (-> ALS_TH_HIGH)
+and/or `in_illuminance_thresh_falling_value` (-> ALS_TH_LOW), then enables
+`..._thresh_rising_en` / `..._thresh_falling_en`. Enabling either event sets
+`INT_CFG.INT_EN` and drives the FSM to CONTINUOUS.
+
+....
+ device (CONTINUOUS)            IRQ thread                       userspace
+    |                               |                                 |
+    | conversion crosses threshold  |                                 |
+    | (in-range -> out-of-range):   |                                 |
+    | ALS_RDY=1, ALS_INT=1,         |                                 |
+    | INT pulses                    |                                 |
+    |------------------------------>|                                 |
+    |                               | read STATUS (clears + rearms)   |
+    |              ALS_RDY: complete(als_done);                       |
+    |                       buffer_en? -> iio_trigger_poll            |
+    |              ALS_INT: read ALS_OUT, compare with                |
+    |                       shadowed thresholds to recover            |
+    |                       the direction the HW doesn't report:      |
+    |                               |                                 |
+    |                value >= thresh_high && rising_en                |
+    |                  -> iio_push_event(THRESH, RISING) ------------>| event fd
+    |                value <= thresh_low && falling_en                | (POLLIN,
+    |                  -> iio_push_event(THRESH, FALLING) ----------->|  read
+    |                otherwise: value already back in range           |  iio_event_data)
+    |                  -> event dropped, not misreported              |
+....
+
+The hardware reports only "a threshold was crossed" via the single `ALS_INT`
+bit. The driver disambiguates by reading the current sample and comparing it
+against the configured thresholds, so userspace receives standard
+direction-resolved rising/falling IIO events. The race where the value
+returns in-range before the handler reads it results in a dropped event by
+design (see <<design-decisions>>).
+
+Threshold writes are validated: a rising value below the current falling
+value (or vice versa) is rejected with `-EINVAL`, so the window stays
+well-formed.
+
+=== Triggered buffer flow
+
+The driver registers its own IRQ-backed trigger; no external trigger is
+needed. Enabling the buffer drives the FSM to CONTINUOUS, and every
+conversion produces one scan record.
+
+....
+ userspace: scan_elements/in_illuminance_en=1 ; buffer/enable=1
+    |
+    v
+ IIO core -> set_trigger_state(enable=1)
+                |  buffer_en = true; FSM -> CONTINUOUS
+                v
+ device: conversion every 200 ms, ALS_RDY=1, INT pulses
+                |
+                v
+ IRQ thread: read STATUS; ALS_RDY && buffer_en -> iio_trigger_poll(trig)
+                |
+                v
+ pollfunc top half: timestamp = iio_get_time_ns()
+                |
+                v
+ envcombo_trigger_handler (bottom half):
+     read ALS_OUT MSB+LSB -> scan.light
+     iio_push_to_buffers_with_timestamp(scan, pf->timestamp)
+     iio_trigger_notify_done
+                |
+                v
+ userspace: read /dev/iio:deviceN
+     record: [ u16 light | 6B pad | s64 timestamp ]  (16 bytes)
+....
+
+Disabling the buffer calls `set_trigger_state(0)`; if no events are enabled
+either, the FSM returns the device to SLEEP.
+
+== Userspace ABI
+
+[cols="3,2,4", options="header"]
+|===
+| sysfs attribute (`iio:deviceN/`) | Backing register | Semantics
+
+| `name` | -- | `"envcombo"`
+| `in_illuminance_raw` | ALS_OUT | On-demand read; one-shot conversion when idle, latched value when CONTINUOUS
+| `in_illuminance_scale` | CFG gain + CALIB_ALS_GAIN | `1 / (gain x calib_gain)`, `IIO_VAL_FRACTIONAL`; illustrative 1.0 lux/count @ gain 1
+| `in_illuminance_hardwaregain` (+`_available`) | CFG[4:3] | One of `1 4 16 64`; invalid writes -> `-EINVAL`
+| `in_illuminance_integration_time` (+`_available`) | CFG[2:1] | One of `0.05 0.1 0.2 0.4` s; read-only (`-EOPNOTSUPP` on write) when CALIB_ALS_TIME override is set
+| `events/in_illuminance_thresh_rising_value` | ALS_TH_HIGH | 0..65535; must stay >= falling value
+| `events/in_illuminance_thresh_falling_value` | ALS_TH_LOW | 0..65535; must stay \<= rising value
+| `events/in_illuminance_thresh_{rising,falling}_en` | INT_CFG.INT_EN + FSM | Either enables interrupts and CONTINUOUS mode
+| `buffer/`, `scan_elements/`, `trigger/` | -- | Standard IIO triggered-buffer interface; scan: u16 light @ index 0 + s64 timestamp
+| `/dev/iio:deviceN` | -- | Buffered scan records + `IIO_GET_EVENT_FD_IOCTL` event stream
+|===
+
+[[design-decisions]]
+== Design Decisions & Tradeoffs
+
+Plain `i2c_smbus` instead of regmap::
+The device has 19 byte-wide registers and the driver touches 11 of them; a
+regmap adds little. Decisive practical point: `CONFIG_REGMAP_I2C` is a
+hidden Kconfig symbol that in-tree drivers pull in via `select`, which an
+out-of-tree module cannot do cleanly. Register caching would be wrong
+anyway (STATUS is clear-on-read, ALS_OUT is hardware-latched).
+
+Hybrid power strategy (SLEEP / ONE-SHOT / CONTINUOUS)::
+Matches the power-on default (SLEEP) and only spends power while a consumer
+is active -- the behavior expected of an ALS in a battery-powered product.
+Tradeoff: more state tracking (three flags + shared FSM helper) than a
+naive "CONTINUOUS at probe" design, and the first raw read pays one
+conversion of latency (bounded by the 500 ms completion timeout).
+
+`INT_LATCH=1`::
+With latching off, `ALS_INT` self-clears once the value returns in-range.
+If that happens between the INT pulse and the threaded handler's STATUS
+read, the event would be silently lost. Latching guarantees the handler
+observes every real crossing. Cost: none for this driver, since the single
+STATUS read both acknowledges and re-arms.
+
+Threaded IRQ, single STATUS read::
+`devm_request_threaded_irq` with a NULL primary handler (so `IRQF_ONESHOT`
+is mandatory) keeps all I2C traffic out of hard-IRQ context. One STATUS
+read serves every consumer at once -- raw-read completion, buffer trigger,
+and threshold events can all result from the same pulse, since a crossing
+always coincides with new data. `IRQF_TRIGGER_LOW` matches `INT_POL=0`
+(active-low), the power-on default the driver keeps.
+
+Direction-resolved events from direction-less hardware::
+The standard IIO threshold ABI is rising/falling, but the hardware reports
+a single `ALS_INT` flag. Rather than pushing `IIO_EV_DIR_EITHER` (valid but
+less useful to consumers), the handler reads the current sample and infers
+the direction from the configured thresholds. If the value has already
+returned in-range, the event is dropped rather than misreported -- for an
+ambient-light alert, a stale notification about a condition that no longer
+holds has negative value.
+
+Mutex-free IRQ thread::
+The raw-read path can hold `data->lock` for up to 500 ms (completion
+timeout). Taking that mutex in the IRQ thread would stall interrupt
+re-arming behind a slow reader, so the handler uses `READ_ONCE()` snapshots
+of the enable flags and thresholds instead, accepting a benign race window
+around concurrent threshold rewrites.
+
+`devm_`-managed lifecycle::
+Every resource (IIO device, trigger, buffer, IRQ) is device-managed and
+torn down in reverse order automatically; the driver needs no `.remove()`.
+The device is left in SLEEP whenever no consumer is active, which is also
+the correct state to leave behind on unbind.
+
+== Source Layout
+
+[cols="3,4", options="header"]
+|===
+| Path | Role
+
+| `recipes-kernel/envcombo-driver/files/envcombo.c` | The IIO driver (this document)
+| `recipes-kernel/envcombo-sim/files/i2c-envcombo-sim.c` | Provided bus + device simulator (reference only, not modified)
+| `recipes-kernel/linux/linux-yocto/iio.cfg` | Kernel config fragment (IIO core, buffer, trigger, kfifo)
+| `recipes-utils/envcombo-test/files/envcombo-test/src/main.rs` | Rust userspace test harness
+| `DESIGN.md` | Condensed 1-2 page design rationale (assignment deliverable)
+|===
