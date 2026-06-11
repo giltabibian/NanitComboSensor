@@ -8,9 +8,9 @@ This document describes the architecture of the `envcombo` Linux IIO driver
 ENV-COMBO I2C combo sensor. Only the ambient-light (ALS, `IIO_LIGHT`) path is
 implemented; temperature and humidity are out of scope for this assignment.
 
-NOTE: Diagrams are maintained as PlantUML sources in `docs/diagrams/*.puml`
+NOTE: Diagrams are maintained as PlantUML sources in `+docs/diagrams/*.puml+`
 and embedded as rendered SVGs. Regenerate after editing with
-`plantuml -tsvg docs/diagrams/*.puml`.
+`+plantuml -tsvg docs/diagrams/*.puml+`.
 
 == System Overview
 
