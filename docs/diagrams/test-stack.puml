@@ -8,7 +8,7 @@ skinparam rectangle {
 }
 
 rectangle "Userspace" as US {
-  component "envcombo-test (Rust)\n9 sequential tests, PASS/FAIL per test,\nexit code = number of failures" as TEST
+  component "envcombo-test (Rust)\n9 sequential tests, PASS/FAIL per test,\nexit code = 0 on full pass, 1 otherwise" as TEST
 }
 
 rectangle "Kernel interfaces exercised" as IF {
