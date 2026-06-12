@@ -212,6 +212,83 @@ rmmod envcombo && modprobe envcombo
 dmesg | tail -1     # "factory calibration overrides ALS integration time to 100 ms..."
 ----
 
+== Inspecting Register State with ImHex
+
+The simulator exposes its full register file at
+`/sys/kernel/debug/envcombo-sim/regs` (19 bytes, one byte per register,
+16-bit fields big-endian). Capturing that blob and decoding it with the
+`docs/envcombo-als.hexpat` pattern gives a field-by-field view of the
+device state at a chosen moment.
+
+This walkthrough captures *one* snapshot after putting the device into a
+known state. ImHex runs on the Windows host; QEMU runs under WSL2, so the
+listener lives in WSL2 (where the guest's slirp gateway `10.0.2.2`
+resolves) and writes the file to a Windows-visible path.
+
+=== Step 1 -- Start a one-shot listener (WSL2)
+
+Accept a single connection and write it where Windows ImHex can open it:
+
+[source,sh]
+----
+nc -l 7777 > /mnt/c/Users/gilta/regs.bin
+----
+
+=== Step 2 -- Set thresholds and power mode (guest)
+
+Drive the device through its real sysfs ABI, so the change goes through
+the I2C write path and lands in the actual registers:
+
+[source,sh]
+----
+cd /sys/bus/iio/devices/iio:device0     # adjust N if not device0
+
+# Thresholds -> ALS_TH_LOW (0x08-09) / ALS_TH_HIGH (0x0A-0B).
+# Keep the window well-formed: low <= high at every step.
+echo 100 > events/in_illuminance_thresh_falling_value
+echo 800 > events/in_illuminance_thresh_rising_value
+
+# Power mode is FSM-driven, not directly writable. Enabling a consumer
+# drives PWR_MODE (0x12) to CONTINUOUS (0x03); disabling all consumers
+# returns it to SLEEP (0x01).
+echo 1 > events/in_illuminance_thresh_either_en
+----
+
+=== Step 3 -- Dump and send the register file once
+
+[source,sh]
+----
+nc 10.0.2.2 7777 < /sys/kernel/debug/envcombo-sim/regs
+----
+
+The listener from Step 1 receives the 19 bytes and exits; `regs.bin` now
+holds the snapshot.
+
+=== Step 4 -- Decode in ImHex (Windows)
+
+Open `C:\Users\gilta\regs.bin`, load `docs/envcombo-als.hexpat`, and run
+it. The Pattern Data view should now show, for this capture:
+
+* `pwr_mode = Continuous`
+* `als_th_low = 100`, `als_th_high = 800`
+* `cfg.als_en = 1`, plus the live `als_out` reading
+
+To capture a different state (e.g. the SLEEP baseline), disable the
+consumer (`echo 0 > events/in_illuminance_thresh_either_en`) and repeat
+from Step 1.
+
+.ImHex decoding a register snapshot via `docs/envcombo-als.hexpat` -- here the SLEEP baseline (`pwr_mode = Sleep`, a 50/200 threshold window)
+image::images/imhex-regs-snapshot.png[ImHex Pattern Data view of the envcombo register dump,900]
+
+[NOTE]
+====
+The debugfs `regs` file is the source of truth for these captures: the
+simulator reconstructs the threshold and ALS bytes from its internal
+state on every read, so the dump always reflects the device as the driver
+left it. Writing register bytes *into* debugfs is not equivalent to the
+sysfs path above and is not used here.
+====
+
 == Run the test harness
 
 The harness is self-contained: module-loading reloads both modules for a
