@@ -214,6 +214,10 @@ dmesg | tail -1     # "factory calibration overrides ALS integration time to 100
 
 == Run the test harness
 
+The harness is self-contained: module-loading reloads both modules for a
+clean slate and every device test rebaselines first, so it can be run at any
+time (including right after the manual section above) without a reboot.
+
 [source,shell]
 ----
 envcombo-test
@@ -223,7 +227,7 @@ echo $?             # 0 = all passed, 1 = at least one failure
 Expected output:
 
 ----
-envcombo driver test harness (9 tests)
+envcombo driver test harness (9 tests, seed 4675903481288702464)
 [1/9] module-loading               PASS
 [2/9] direct-als-read              PASS
 [3/9] gain-and-integration-time    PASS
@@ -233,12 +237,22 @@ envcombo driver test harness (9 tests)
 [7/9] power-fsm-transitions        PASS
 [8/9] module-unloading             PASS
 [9/9] kernel-log-health            PASS
-RESULT: all 9 tests passed
+RESULT: all 9 tests passed (seed 4675903481288702464)
+----
+
+The device tests (2--7) run in a random order each time, seeded from the
+clock, to prove they are order-independent; module-loading stays first and
+module-unloading / kernel-log-health stay last. The seed is printed so a
+failing order can be replayed deterministically:
+
+[source,shell]
+----
+ENVCOMBO_TEST_SEED=4675903481288702464 envcombo-test   # or: envcombo-test --seed=4675903481288702464
 ----
 
 See link:test-harness.html[the test harness page] for what each test
 asserts. After a run, `dmesg | tail -20` should show only the clean
-unload/reload messages from test 8.
+unload/reload messages from module-loading and module-unloading.
 
 == Check the driver coding style
 

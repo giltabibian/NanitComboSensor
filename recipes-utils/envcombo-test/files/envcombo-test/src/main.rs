@@ -63,6 +63,50 @@ macro_rules! check {
     };
 }
 
+/// Tiny seeded PRNG (splitmix64) so the test order can be shuffled
+/// reproducibly without pulling in an external crate (the Yocto build is
+/// offline).
+struct Rng(u64);
+
+impl Rng {
+    fn new(seed: u64) -> Self {
+        Rng(seed)
+    }
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+    /// Index in 0..n (n must be > 0).
+    fn below(&mut self, n: usize) -> usize {
+        (self.next_u64() % n as u64) as usize
+    }
+}
+
+/// Seed for the test-order shuffle: `--seed=N`, else `ENVCOMBO_TEST_SEED=N`,
+/// else derived from the clock. Always printed so any failing ordering can
+/// be replayed.
+fn parse_seed() -> u64 {
+    for arg in std::env::args().skip(1) {
+        if let Some(v) = arg.strip_prefix("--seed=") {
+            if let Ok(n) = v.parse() {
+                return n;
+            }
+        }
+    }
+    if let Ok(v) = std::env::var("ENVCOMBO_TEST_SEED") {
+        if let Ok(n) = v.parse() {
+            return n;
+        }
+    }
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E37_79B9_7F4A_7C15)
+}
+
 fn main() {
     let tests: &[(&str, fn(&mut Ctx) -> TestResult)] = &[
         ("module-loading", test_module_loading),
@@ -76,24 +120,49 @@ fn main() {
         ("kernel-log-health", test_kernel_log),
     ];
 
+    // module-loading (first) discovers the device and forces a clean slate;
+    // module-unloading and kernel-log-health (last two) must run after every
+    // device test. Only the device tests in between are order-independent, so
+    // those are the ones we shuffle -- a reproducible way to prove the
+    // per-test isolation holds regardless of order. Replay a specific order
+    // with --seed=N or ENVCOMBO_TEST_SEED=N.
+    let seed = parse_seed();
+    let mut order: Vec<usize> = (0..tests.len()).collect();
+    let (mid_start, mid_end) = (1, tests.len() - 2);
+    let mut rng = Rng::new(seed);
+    for i in (mid_start + 1..mid_end).rev() {
+        let j = mid_start + rng.below(i - mid_start + 1);
+        order.swap(i, j);
+    }
+
     let mut ctx = Ctx::default();
     let mut failures = 0;
 
-    println!("envcombo driver test harness ({} tests)", tests.len());
-    for (i, (name, test)) in tests.iter().enumerate() {
+    println!(
+        "envcombo driver test harness ({} tests, seed {})",
+        tests.len(),
+        seed
+    );
+    for (pos, &idx) in order.iter().enumerate() {
+        let (name, test) = tests[idx];
         match test(&mut ctx) {
-            Ok(()) => println!("[{}/{}] {:<28} PASS", i + 1, tests.len(), name),
+            Ok(()) => println!("[{}/{}] {:<28} PASS", pos + 1, tests.len(), name),
             Err(e) => {
                 failures += 1;
-                println!("[{}/{}] {:<28} FAIL: {}", i + 1, tests.len(), name, e);
+                println!("[{}/{}] {:<28} FAIL: {}", pos + 1, tests.len(), name, e);
             }
         }
     }
 
     if failures == 0 {
-        println!("RESULT: all {} tests passed", tests.len());
+        println!("RESULT: all {} tests passed (seed {})", tests.len(), seed);
     } else {
-        println!("RESULT: {} of {} tests FAILED", failures, tests.len());
+        println!(
+            "RESULT: {} of {} tests FAILED (seed {})",
+            failures,
+            tests.len(),
+            seed
+        );
     }
     std::process::exit(if failures == 0 { 0 } else { 1 });
 }
