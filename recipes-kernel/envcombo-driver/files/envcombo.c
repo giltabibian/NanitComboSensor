@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * envcombo.c - IIO driver for the ENV-COMBO sensor (ambient light channel)
+ * IIO driver for the ENV-COMBO sensor (ambient light channel)
  *
  * Only the ALS (IIO_LIGHT) functionality of the ENV-COMBO is implemented;
  * the temperature and humidity channels are out of scope for this driver.
@@ -195,9 +195,9 @@ static int envcombo_update_power_mode(struct envcombo_data *data)
 	bool active = data->buffer_en || data->ev_en;
 
 	return envcombo_update_bits(data->client, ENVCOMBO_REG_PWR_MODE,
-				     ENVCOMBO_PWR_MODE_MASK,
-				     active ? ENVCOMBO_PWR_CONTINUOUS :
-					      ENVCOMBO_PWR_SLEEP);
+				    ENVCOMBO_PWR_MODE_MASK,
+				    active ? ENVCOMBO_PWR_CONTINUOUS :
+					     ENVCOMBO_PWR_SLEEP);
 }
 
 static int envcombo_read_als_raw(struct envcombo_data *data, int *val)
@@ -236,7 +236,7 @@ out_unlock:
 
 static int envcombo_read_raw(struct iio_dev *indio_dev,
 			     struct iio_chan_spec const *chan,
-			      int *val, int *val2, long mask)
+			     int *val, int *val2, long mask)
 {
 	struct envcombo_data *data = iio_priv(indio_dev);
 	int gain;
@@ -269,8 +269,8 @@ static int envcombo_read_raw(struct iio_dev *indio_dev,
 
 static int envcombo_read_avail(struct iio_dev *indio_dev,
 			       struct iio_chan_spec const *chan,
-				const int **vals, int *type, int *length,
-				long mask)
+			       const int **vals, int *type, int *length,
+			       long mask)
 {
 	struct envcombo_data *data = iio_priv(indio_dev);
 
@@ -300,7 +300,7 @@ static int envcombo_read_avail(struct iio_dev *indio_dev,
 
 static int envcombo_write_raw_get_fmt(struct iio_dev *indio_dev,
 				      struct iio_chan_spec const *chan,
-				       long mask)
+				      long mask)
 {
 	switch (mask) {
 	case IIO_CHAN_INFO_INT_TIME:
@@ -312,7 +312,7 @@ static int envcombo_write_raw_get_fmt(struct iio_dev *indio_dev,
 
 static int envcombo_write_raw(struct iio_dev *indio_dev,
 			      struct iio_chan_spec const *chan,
-			       int val, int val2, long mask)
+			      int val, int val2, long mask)
 {
 	struct envcombo_data *data = iio_priv(indio_dev);
 	int ret, idx, i;
@@ -332,7 +332,7 @@ static int envcombo_write_raw(struct iio_dev *indio_dev,
 		mutex_lock(&data->lock);
 		ret = envcombo_update_bits(data->client, ENVCOMBO_REG_CFG,
 					   ENVCOMBO_CFG_ALS_GAIN_MASK,
-					    FIELD_PREP(ENVCOMBO_CFG_ALS_GAIN_MASK, idx));
+					   FIELD_PREP(ENVCOMBO_CFG_ALS_GAIN_MASK, idx));
 		if (!ret)
 			data->als_gain_idx = idx;
 		mutex_unlock(&data->lock);
@@ -357,7 +357,7 @@ static int envcombo_write_raw(struct iio_dev *indio_dev,
 		mutex_lock(&data->lock);
 		ret = envcombo_update_bits(data->client, ENVCOMBO_REG_CFG,
 					   ENVCOMBO_CFG_ALS_TIME_MASK,
-					    FIELD_PREP(ENVCOMBO_CFG_ALS_TIME_MASK, idx));
+					   FIELD_PREP(ENVCOMBO_CFG_ALS_TIME_MASK, idx));
 		if (!ret)
 			data->als_time_idx = idx;
 		mutex_unlock(&data->lock);
@@ -370,10 +370,10 @@ static int envcombo_write_raw(struct iio_dev *indio_dev,
 
 static int envcombo_read_event_value(struct iio_dev *indio_dev,
 				     const struct iio_chan_spec *chan,
-				      enum iio_event_type type,
-				      enum iio_event_direction dir,
-				      enum iio_event_info info,
-				      int *val, int *val2)
+				     enum iio_event_type type,
+				     enum iio_event_direction dir,
+				     enum iio_event_info info,
+				     int *val, int *val2)
 {
 	struct envcombo_data *data = iio_priv(indio_dev);
 
@@ -393,10 +393,10 @@ static int envcombo_read_event_value(struct iio_dev *indio_dev,
 
 static int envcombo_write_event_value(struct iio_dev *indio_dev,
 				      const struct iio_chan_spec *chan,
-				       enum iio_event_type type,
-				       enum iio_event_direction dir,
-				       enum iio_event_info info,
-				       int val, int val2)
+				      enum iio_event_type type,
+				      enum iio_event_direction dir,
+				      enum iio_event_info info,
+				      int val, int val2)
 {
 	struct envcombo_data *data = iio_priv(indio_dev);
 	int ret;
@@ -439,8 +439,8 @@ static int envcombo_write_event_value(struct iio_dev *indio_dev,
 
 static int envcombo_read_event_config(struct iio_dev *indio_dev,
 				      const struct iio_chan_spec *chan,
-				       enum iio_event_type type,
-				       enum iio_event_direction dir)
+				      enum iio_event_type type,
+				      enum iio_event_direction dir)
 {
 	struct envcombo_data *data = iio_priv(indio_dev);
 
@@ -449,9 +449,9 @@ static int envcombo_read_event_config(struct iio_dev *indio_dev,
 
 static int envcombo_write_event_config(struct iio_dev *indio_dev,
 				       const struct iio_chan_spec *chan,
-					enum iio_event_type type,
-					enum iio_event_direction dir,
-					int state)
+				       enum iio_event_type type,
+				       enum iio_event_direction dir,
+				       int state)
 {
 	struct envcombo_data *data = iio_priv(indio_dev);
 	int ret;
@@ -510,7 +510,7 @@ static irqreturn_t envcombo_trigger_handler(int irq, void *p)
 	if (!ret)
 		iio_push_to_buffers_with_timestamp(indio_dev, &data->scan,
 						   pf->timestamp ?:
-						    iio_get_time_ns(indio_dev));
+						   iio_get_time_ns(indio_dev));
 
 	iio_trigger_notify_done(indio_dev->trig);
 
@@ -573,7 +573,7 @@ static int envcombo_probe(struct i2c_client *client)
 
 	if (!i2c_check_functionality(client->adapter,
 				     I2C_FUNC_SMBUS_BYTE_DATA |
-				      I2C_FUNC_SMBUS_WORD_DATA))
+				     I2C_FUNC_SMBUS_WORD_DATA))
 		return -EOPNOTSUPP;
 
 	indio_dev = devm_iio_device_alloc(dev, sizeof(*data));
@@ -619,8 +619,8 @@ static int envcombo_probe(struct i2c_client *client)
 
 	ret = envcombo_write_reg(client, ENVCOMBO_REG_CFG,
 				 ENVCOMBO_CFG_ALS_EN |
-				  FIELD_PREP(ENVCOMBO_CFG_ALS_GAIN_MASK, data->als_gain_idx) |
-				  FIELD_PREP(ENVCOMBO_CFG_ALS_TIME_MASK, data->als_time_idx));
+				 FIELD_PREP(ENVCOMBO_CFG_ALS_GAIN_MASK, data->als_gain_idx) |
+				 FIELD_PREP(ENVCOMBO_CFG_ALS_TIME_MASK, data->als_time_idx));
 	if (ret)
 		return ret;
 
@@ -654,8 +654,8 @@ static int envcombo_probe(struct i2c_client *client)
 
 	ret = devm_request_threaded_irq(dev, client->irq, NULL,
 					envcombo_irq_thread,
-					 IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
-					 "envcombo", indio_dev);
+					IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+					"envcombo", indio_dev);
 	if (ret)
 		return ret;
 
@@ -679,7 +679,7 @@ static int envcombo_probe(struct i2c_client *client)
 
 	ret = devm_iio_triggered_buffer_setup(dev, indio_dev,
 					      iio_pollfunc_store_time,
-					       envcombo_trigger_handler, NULL);
+					      envcombo_trigger_handler, NULL);
 	if (ret)
 		return ret;
 
