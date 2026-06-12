@@ -5,25 +5,24 @@
 
 link:index.html[<- Back to documentation index]
 
-Everything below is copy-pasteable. Host-side commands assume a Yocto 5.0
-(scarthgap) checkout of poky; target-side commands run as root in the
-booted image (the default login, no password).
+Host-side commands assume a Yocto 5.0 (scarthgap) checkout of poky; target-side commands run as root in the booted image (the default login, no password).
 
 == Prerequisites
 
 * poky, scarthgap branch (`git clone -b scarthgap git://git.yoctoproject.org/poky`)
+* checked out to the `yocto-5.0.18` tag
 * The usual Yocto host packages for your distro
 * This repository checked out next to (or anywhere relative to) poky
 
-== Add the layer and configure the build
+== Configuration - add the layer and configure the build
 
 [source,shell]
 ----
 cd poky
 source oe-init-build-env build-qemu-arm64        # creates/enters the build dir
 
-# target machine (conf/local.conf):
-echo 'MACHINE = "qemuarm64"' >> conf/local.conf
+# Update MACHINE in conf/local.conf to build for QEMU's 64-bit ARM platform
+# MACHINE = "qemuarm64"
 
 # register the layer:
 bitbake-layers add-layer /path/to/NanitComboSensor
@@ -71,10 +70,6 @@ ls tmp/work/qemuarm64-poky-linux/envcombo-driver/1.0/envcombo.ko \
 ----
 runqemu qemuarm64 envcombo-image nographic slirp
 
-# if runqemu cannot resolve the image by name, point it at the qemuboot file:
-runqemu tmp/deploy/images/qemuarm64/envcombo-image-qemuarm64.rootfs.qemuboot.conf \
-        nographic slirp
-
 # add "snapshot" to keep the rootfs pristine across runs; exit QEMU with Ctrl-A x
 ----
 
@@ -105,15 +100,20 @@ Manual load/unload (e.g. after testing or to re-probe):
 
 [source,shell]
 ----
-rmmod envcombo && rmmod i2c_envcombo_sim
+rmmod i2c_envcombo_sim && rmmod envcombo
 modprobe i2c-envcombo-sim && modprobe envcombo
 dmesg | tail
 ----
 
 == Exercise the driver manually
 
-All paths below are relative to `/sys/bus/iio/devices/iio:device0`; set
-`cd /sys/bus/iio/devices/iio:device0` first.
+*All paths below are relative to the IIO device directory -- run this
+first:*
+
+[source,shell]
+----
+cd /sys/bus/iio/devices/iio:device0
+----
 
 === On-demand ALS reads (one-shot)
 
@@ -164,7 +164,7 @@ enable/power side is fully checkable from the shell:
 echo 1 > events/in_illuminance_thresh_either_en
 cat events/in_illuminance_thresh_either_en        # 1
 # device register check -- PWR_MODE (offset 0x12) == 03 (CONTINUOUS):
-hexdump -C /sys/kernel/debug/envcombo-sim/regs | head -2
+hexdump -C /sys/kernel/debug/envcombo-sim/regs
 
 echo 0 > events/in_illuminance_thresh_either_en   # back to SLEEP (01)
 ----
@@ -181,7 +181,7 @@ echo 64 > buffer/length
 echo 1 > buffer/enable
 
 # one 16-byte record per 200 ms: [u16 light][6B pad][s64 timestamp]
-hexdump -e '1/2 "light=%5u " 6/1 "" 1/8 " ts=%d\n"' -n 160 /dev/iio:device0
+hexdump -e '1/2 "light=%5u " 6/1 "%02x " 1/4 " ts_lo=%u " 1/4 "ts_hi=%u\n"' -n 160 /dev/iio:device0
 
 echo 0 > buffer/enable
 echo 0 > scan_elements/in_illuminance_en
@@ -236,6 +236,36 @@ RESULT: all 9 tests passed
 See link:test-harness.html[the test harness page] for what each test
 asserts. After a run, `dmesg | tail -20` should show only the clean
 unload/reload messages from test 8.
+
+== Check the driver coding style
+
+The driver follows the Linux kernel coding style. Verify it with the
+kernel's own `checkpatch.pl`. If you don't have a kernel tree handy, fetch
+the standalone script (plus its optional data files) and run it in file mode:
+
+[source,shell]
+----
+# fetch checkpatch and its optional data files:
+curl -fsSL -o /tmp/checkpatch.pl \
+    https://raw.githubusercontent.com/torvalds/linux/master/scripts/checkpatch.pl
+curl -fsSL -o /tmp/spelling.txt \
+    https://raw.githubusercontent.com/torvalds/linux/master/scripts/spelling.txt
+curl -fsSL -o /tmp/const_structs.checkpatch \
+    https://raw.githubusercontent.com/torvalds/linux/master/scripts/const_structs.checkpatch
+
+# check the driver source (file mode, no kernel tree, strict checks):
+perl /tmp/checkpatch.pl --no-tree --strict -f \
+    recipes-kernel/envcombo-driver/files/envcombo.c
+# expect: "total: 0 errors, 0 warnings, 0 checks"
+----
+
+`--no-tree` runs standalone, `--strict` enables the stricter `CHECK:`-level
+tests, and `-f` checks an existing file instead of a patch. Add `--terse` for
+one line per finding.
+
+NOTE: checkpatch only validates the first wrapped line of a multi-line
+statement against the opening parenthesis, so it does not catch alignment
+drift on the second and later continuation lines -- review those by eye.
 
 == Troubleshooting
 

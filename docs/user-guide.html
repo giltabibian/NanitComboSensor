@@ -444,7 +444,7 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <div id="toctitle">Table of Contents</div>
 <ul class="sectlevel1">
 <li><a href="#_prerequisites">1. Prerequisites</a></li>
-<li><a href="#_add_the_layer_and_configure_the_build">2. Add the layer and configure the build</a></li>
+<li><a href="#_configuration_add_the_layer_and_configure_the_build">2. Configuration - add the layer and configure the build</a></li>
 <li><a href="#_build">3. Build</a>
 <ul class="sectlevel2">
 <li><a href="#_check_the_build_artifacts">3.1. Check the build artifacts</a></li>
@@ -463,7 +463,8 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </ul>
 </li>
 <li><a href="#_run_the_test_harness">7. Run the test harness</a></li>
-<li><a href="#_troubleshooting">8. Troubleshooting</a></li>
+<li><a href="#_check_the_driver_coding_style">8. Check the driver coding style</a></li>
+<li><a href="#_troubleshooting">9. Troubleshooting</a></li>
 </ul>
 </div>
 </div>
@@ -474,9 +475,7 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <p><a href="index.html">&#8592; Back to documentation index</a></p>
 </div>
 <div class="paragraph">
-<p>Everything below is copy-pasteable. Host-side commands assume a Yocto 5.0
-(scarthgap) checkout of poky; target-side commands run as root in the
-booted image (the default login, no password).</p>
+<p>Host-side commands assume a Yocto 5.0 (scarthgap) checkout of poky; target-side commands run as root in the booted image (the default login, no password).</p>
 </div>
 </div>
 </div>
@@ -489,6 +488,9 @@ booted image (the default login, no password).</p>
 <p>poky, scarthgap branch (<code>git clone -b scarthgap git://git.yoctoproject.org/poky</code>)</p>
 </li>
 <li>
+<p>checked out to the yocto-5.0.18 tag</p>
+</li>
+<li>
 <p>The usual Yocto host packages for your distro</p>
 </li>
 <li>
@@ -499,15 +501,15 @@ booted image (the default login, no password).</p>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_add_the_layer_and_configure_the_build">2. Add the layer and configure the build</h2>
+<h2 id="_configuration_add_the_layer_and_configure_the_build">2. Configuration - add the layer and configure the build</h2>
 <div class="sectionbody">
 <div class="listingblock">
 <div class="content">
 <pre class="highlight"><code class="language-shell" data-lang="shell">cd poky
 source oe-init-build-env build-qemu-arm64        # creates/enters the build dir
 
-# target machine (conf/local.conf):
-echo 'MACHINE = "qemuarm64"' &gt;&gt; conf/local.conf
+# Update MACHINE in conf/local.conf to build for QEMU's 64-bit ARM platform
+# MACHINE = "qemuarm64"
 
 # register the layer:
 bitbake-layers add-layer /path/to/NanitComboSensor
@@ -562,10 +564,6 @@ ls tmp/work/qemuarm64-poky-linux/envcombo-driver/1.0/envcombo.ko \
 <div class="content">
 <pre class="highlight"><code class="language-shell" data-lang="shell">runqemu qemuarm64 envcombo-image nographic slirp
 
-# if runqemu cannot resolve the image by name, point it at the qemuboot file:
-runqemu tmp/deploy/images/qemuarm64/envcombo-image-qemuarm64.rootfs.qemuboot.conf \
-        nographic slirp
-
 # add "snapshot" to keep the rootfs pristine across runs; exit QEMU with Ctrl-A x</code></pre>
 </div>
 </div>
@@ -602,7 +600,7 @@ ls /dev/iio:device0</code></pre>
 </div>
 <div class="listingblock">
 <div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">rmmod envcombo &amp;&amp; rmmod i2c_envcombo_sim
+<pre class="highlight"><code class="language-shell" data-lang="shell">rmmod i2c_envcombo_sim &amp;&amp; rmmod envcombo
 modprobe i2c-envcombo-sim &amp;&amp; modprobe envcombo
 dmesg | tail</code></pre>
 </div>
@@ -613,8 +611,13 @@ dmesg | tail</code></pre>
 <h2 id="_exercise_the_driver_manually">6. Exercise the driver manually</h2>
 <div class="sectionbody">
 <div class="paragraph">
-<p>All paths below are relative to <code>/sys/bus/iio/devices/iio:device0</code>; set
-<code>cd /sys/bus/iio/devices/iio:device0</code> first.</p>
+<p><strong>All paths below are relative to the IIO device directory&#8201;&#8212;&#8201;run this
+first:</strong></p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-shell" data-lang="shell">cd /sys/bus/iio/devices/iio:device0</code></pre>
+</div>
 </div>
 <div class="sect2">
 <h3 id="_on_demand_als_reads_one_shot">6.1. On-demand ALS reads (one-shot)</h3>
@@ -669,7 +672,7 @@ enable/power side is fully checkable from the shell:</p>
 <pre class="highlight"><code class="language-shell" data-lang="shell">echo 1 &gt; events/in_illuminance_thresh_either_en
 cat events/in_illuminance_thresh_either_en        # 1
 # device register check -- PWR_MODE (offset 0x12) == 03 (CONTINUOUS):
-hexdump -C /sys/kernel/debug/envcombo-sim/regs | head -2
+hexdump -C /sys/kernel/debug/envcombo-sim/regs
 
 echo 0 &gt; events/in_illuminance_thresh_either_en   # back to SLEEP (01)</code></pre>
 </div>
@@ -687,7 +690,7 @@ echo 64 &gt; buffer/length
 echo 1 &gt; buffer/enable
 
 # one 16-byte record per 200 ms: [u16 light][6B pad][s64 timestamp]
-hexdump -e '1/2 "light=%5u " 6/1 "" 1/8 " ts=%d\n"' -n 160 /dev/iio:device0
+hexdump -e '1/2 "light=%5u " 6/1 "%02x " 1/4 " ts_lo=%u " 1/4 "ts_hi=%u\n"' -n 160 /dev/iio:device0
 
 echo 0 &gt; buffer/enable
 echo 0 &gt; scan_elements/in_illuminance_en
@@ -755,7 +758,52 @@ unload/reload messages from test 8.</p>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_troubleshooting">8. Troubleshooting</h2>
+<h2 id="_check_the_driver_coding_style">8. Check the driver coding style</h2>
+<div class="sectionbody">
+<div class="paragraph">
+<p>The driver follows the Linux kernel coding style. Verify it with the
+kernel&#8217;s own <code>checkpatch.pl</code>. If you don&#8217;t have a kernel tree handy, fetch
+the standalone script (plus its optional data files) and run it in file mode:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-shell" data-lang="shell"># fetch checkpatch and its optional data files:
+curl -fsSL -o /tmp/checkpatch.pl \
+    https://raw.githubusercontent.com/torvalds/linux/master/scripts/checkpatch.pl
+curl -fsSL -o /tmp/spelling.txt \
+    https://raw.githubusercontent.com/torvalds/linux/master/scripts/spelling.txt
+curl -fsSL -o /tmp/const_structs.checkpatch \
+    https://raw.githubusercontent.com/torvalds/linux/master/scripts/const_structs.checkpatch
+
+# check the driver source (file mode, no kernel tree, strict checks):
+perl /tmp/checkpatch.pl --no-tree --strict -f \
+    recipes-kernel/envcombo-driver/files/envcombo.c
+# expect: "total: 0 errors, 0 warnings, 0 checks"</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p><code>--no-tree</code> runs standalone, <code>--strict</code> enables the stricter <code>CHECK:</code>-level
+tests, and <code>-f</code> checks an existing file instead of a patch. Add <code>--terse</code> for
+one line per finding.</p>
+</div>
+<div class="admonitionblock note">
+<table>
+<tr>
+<td class="icon">
+<div class="title">Note</div>
+</td>
+<td class="content">
+checkpatch only validates the first wrapped line of a multi-line
+statement against the opening parenthesis, so it does not catch alignment
+drift on the second and later continuation lines&#8201;&#8212;&#8201;review those by eye.
+</td>
+</tr>
+</table>
+</div>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_troubleshooting">9. Troubleshooting</h2>
 <div class="sectionbody">
 <table class="tableblock frame-all grid-all stretch">
 <colgroup>
@@ -801,7 +849,7 @@ unload/reload messages from test 8.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-12 14:26:49 +0300
+Last updated 2026-06-12 15:28:08 +0300
 </div>
 </div>
 </body>
