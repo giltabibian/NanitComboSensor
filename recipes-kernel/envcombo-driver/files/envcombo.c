@@ -501,9 +501,15 @@ static irqreturn_t envcombo_trigger_handler(int irq, void *p)
 
 	ret = envcombo_read_reg16(data->client, ENVCOMBO_REG_ALS_MSB,
 				   &data->scan.light);
+	/*
+	 * Our own trigger fires via iio_trigger_poll_nested(), which skips
+	 * the iio_pollfunc_store_time top half, so pf->timestamp is only
+	 * populated when an external hard-irq trigger is in use.
+	 */
 	if (!ret)
 		iio_push_to_buffers_with_timestamp(indio_dev, &data->scan,
-						    pf->timestamp);
+						    pf->timestamp ?:
+						    iio_get_time_ns(indio_dev));
 
 	iio_trigger_notify_done(indio_dev->trig);
 
@@ -525,8 +531,12 @@ static irqreturn_t envcombo_irq_thread(int irq, void *private)
 
 	if (status & ENVCOMBO_STATUS_ALS_RDY) {
 		complete(&data->als_done);
+		/*
+		 * Threaded handler context: use the nested variant of
+		 * iio_trigger_poll(), which is reserved for hard-irq context.
+		 */
 		if (READ_ONCE(data->buffer_en))
-			iio_trigger_poll(data->trig);
+			iio_trigger_poll_nested(data->trig);
 	}
 
 	/*
@@ -548,11 +558,6 @@ static irqreturn_t envcombo_irq_thread(int irq, void *private)
 			       iio_get_time_ns(indio_dev));
 
 	return IRQ_HANDLED;
-}
-
-static void envcombo_trigger_put(void *trig)
-{
-	iio_trigger_put(trig);
 }
 
 static int envcombo_probe(struct i2c_client *client)
@@ -665,10 +670,11 @@ static int envcombo_probe(struct i2c_client *client)
 	if (ret)
 		return ret;
 
+	/*
+	 * Default trigger: take a reference for indio_dev->trig; the IIO
+	 * core drops it in iio_dev_release(), so no matching put here.
+	 */
 	indio_dev->trig = iio_trigger_get(data->trig);
-	ret = devm_add_action_or_reset(dev, envcombo_trigger_put, indio_dev->trig);
-	if (ret)
-		return ret;
 
 	ret = devm_iio_triggered_buffer_setup(dev, indio_dev,
 					       iio_pollfunc_store_time,
