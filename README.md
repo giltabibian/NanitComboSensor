@@ -42,6 +42,13 @@ alongside the sources):
 3. [Installation, Build & Run](docs/user-guide.adoc) — every build, boot,
    and manual-verification command, step by step.
 
+To re-render after editing (requires `asciidoctor` and `plantuml`):
+
+```bash
+plantuml -tsvg -o svg docs/diagrams/*.puml   # diagrams -> docs/diagrams/svg/
+asciidoctor docs/*.adoc                      # pages    -> docs/*.html
+```
+
 ## Layer contents
 
 ```
