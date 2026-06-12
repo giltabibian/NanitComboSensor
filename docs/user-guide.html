@@ -462,9 +462,19 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <li><a href="#_inspect_raw_device_registers_simulator_debugfs">6.6. Inspect raw device registers (simulator debugfs)</a></li>
 </ul>
 </li>
-<li><a href="#_run_the_test_harness">7. Run the test harness</a></li>
-<li><a href="#_check_the_driver_coding_style">8. Check the driver coding style</a></li>
-<li><a href="#_troubleshooting">9. Troubleshooting</a></li>
+<li><a href="#_inspecting_register_state_with_imhex">7. Inspecting Register State with ImHex</a>
+<ul class="sectlevel2">
+<li><a href="#_step_1start_a_one_shot_listener_wsl2">7.1. Step 1&#8201;&#8212;&#8201;Start a one-shot listener (WSL2)</a></li>
+<li><a href="#_step_2set_thresholds_and_power_mode_guest">7.2. Step 2&#8201;&#8212;&#8201;Set thresholds and power mode (guest)</a></li>
+<li><a href="#_step_3dump_and_send_the_register_file_once">7.3. Step 3&#8201;&#8212;&#8201;Dump and send the register file once</a></li>
+<li><a href="#_step_4decode_in_imhex_windows">7.4. Step 4&#8201;&#8212;&#8201;Decode in ImHex (Windows)</a></li>
+<li><a href="#_graphing_als_samples">7.5. Graphing ALS samples</a></li>
+<li><a href="#_full_records_with_timestamps">7.6. Full records with timestamps</a></li>
+</ul>
+</li>
+<li><a href="#_run_the_test_harness">8. Run the test harness</a></li>
+<li><a href="#_check_the_driver_coding_style">9. Check the driver coding style</a></li>
+<li><a href="#_troubleshooting">10. Troubleshooting</a></li>
 </ul>
 </div>
 </div>
@@ -651,9 +661,9 @@ cat in_illuminance_integration_time               # 0.400000</code></pre>
 <h3 id="_threshold_window">6.3. Threshold window</h3>
 <div class="listingblock">
 <div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell"># window [50, 200]; write falling first so the window stays well-formed:
-echo 50  &gt; events/in_illuminance_thresh_falling_value
-echo 200 &gt; events/in_illuminance_thresh_rising_value
+<pre class="highlight"><code class="language-shell" data-lang="shell"># window [100, 800]; write falling first so the window stays well-formed:
+echo 100  &gt; events/in_illuminance_thresh_falling_value
+echo 800 &gt; events/in_illuminance_thresh_rising_value
 cat events/in_illuminance_thresh_*_value
 
 echo 10  &gt; events/in_illuminance_thresh_rising_value   # rejected (&lt; falling)</code></pre>
@@ -727,8 +737,233 @@ dmesg | tail -1     # "factory calibration overrides ALS integration time to 100
 </div>
 </div>
 <div class="sect1">
-<h2 id="_run_the_test_harness">7. Run the test harness</h2>
+<h2 id="_inspecting_register_state_with_imhex">7. Inspecting Register State with ImHex</h2>
 <div class="sectionbody">
+<div class="paragraph">
+<p>The simulator exposes its full register file at
+<code>/sys/kernel/debug/envcombo-sim/regs</code> (19 bytes, one byte per register,
+16-bit fields big-endian). Capturing that blob and decoding it with the
+<code>docs/imhex/envcombo-als.hexpat</code> pattern gives a field-by-field view of the
+device state at a chosen moment.</p>
+</div>
+<div class="paragraph">
+<p>This walkthrough captures <strong>one</strong> snapshot after putting the device into a
+known state. ImHex runs on the Windows host; QEMU runs under WSL2, so the
+listener lives in WSL2 (where the guest&#8217;s slirp gateway <code>10.0.2.2</code>
+resolves) and writes the file to a Windows-visible path.</p>
+</div>
+<div class="sect2">
+<h3 id="_step_1start_a_one_shot_listener_wsl2">7.1. Step 1&#8201;&#8212;&#8201;Start a one-shot listener (WSL2)</h3>
+<div class="paragraph">
+<p>Accept a single connection and write it where Windows ImHex can open it:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-sh" data-lang="sh">nc -l 7777 &gt; /mnt/c/Users/&lt;windows-user&gt;/regs.bin</code></pre>
+</div>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_step_2set_thresholds_and_power_mode_guest">7.2. Step 2&#8201;&#8212;&#8201;Set thresholds and power mode (guest)</h3>
+<div class="paragraph">
+<p>Drive the device through its real sysfs ABI, so the change goes through
+the I2C write path and lands in the actual registers:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-sh" data-lang="sh">cd /sys/bus/iio/devices/iio:device0     # adjust N if not device0
+
+# Thresholds -&gt; ALS_TH_LOW (0x08-09) / ALS_TH_HIGH (0x0A-0B).
+# Keep the window well-formed: low &lt;= high at every step.
+echo 100 &gt; events/in_illuminance_thresh_falling_value
+echo 800 &gt; events/in_illuminance_thresh_rising_value
+
+# Power mode is FSM-driven, not directly writable. Enabling a consumer
+# drives PWR_MODE (0x12) to CONTINUOUS (0x03); disabling all consumers
+# returns it to SLEEP (0x01).
+echo 1 &gt; events/in_illuminance_thresh_either_en</code></pre>
+</div>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_step_3dump_and_send_the_register_file_once">7.3. Step 3&#8201;&#8212;&#8201;Dump and send the register file once</h3>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-sh" data-lang="sh">nc 10.0.2.2 7777 &lt; /sys/kernel/debug/envcombo-sim/regs</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>The listener from Step 1 receives the 19 bytes and exits; <code>regs.bin</code> now
+holds the snapshot.</p>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_step_4decode_in_imhex_windows">7.4. Step 4&#8201;&#8212;&#8201;Decode in ImHex (Windows)</h3>
+<div class="paragraph">
+<p>Open <code>C:\Users\&lt;windows-user&gt;\regs.bin</code>, load <code>docs/imhex/envcombo-als.hexpat</code>, and run
+it. The Pattern Data view should now show, for this capture:</p>
+</div>
+<div class="ulist">
+<ul>
+<li>
+<p><code>pwr_mode = Continuous</code></p>
+</li>
+<li>
+<p><code>als_th_low = 100</code>, <code>als_th_high = 800</code></p>
+</li>
+<li>
+<p><code>cfg.als_en = 1</code>, plus the live <code>als_out</code> reading</p>
+</li>
+</ul>
+</div>
+<div class="paragraph">
+<p>To capture a different state (e.g. the SLEEP baseline), disable the
+consumer (<code>echo 0 &gt; events/in_illuminance_thresh_either_en</code>) and repeat
+from Step 1.</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="images/imhex-regs-snapshot.png" alt="ImHex Pattern Data view of the envcombo register dump" width="900">
+</div>
+<div class="title">Figure 1. ImHex decoding a register snapshot via <code>docs/imhex/envcombo-als.hexpat</code>&#8201;&#8212;&#8201;here the SLEEP baseline (<code>pwr_mode = Sleep</code>, a 100/800 threshold window)</div>
+</div>
+<div class="admonitionblock note">
+<table>
+<tr>
+<td class="icon">
+<div class="title">Note</div>
+</td>
+<td class="content">
+<div class="paragraph">
+<p>The debugfs <code>regs</code> file is the source of truth for these captures: the
+simulator reconstructs the threshold and ALS bytes from its internal
+state on every read, so the dump always reflects the device as the driver
+left it. Writing register bytes <strong>into</strong> debugfs is not equivalent to the
+sysfs path above and is not used here.</p>
+</div>
+</td>
+</tr>
+</table>
+</div>
+<div class="admonitionblock note">
+<table>
+<tr>
+<td class="icon">
+<div class="title">Note</div>
+</td>
+<td class="content">
+<div class="paragraph">
+<p><code>docs/imhex/envcombo-als.hexpat</code> uses typed enums inside bitfields and LSB-first
+bitfield order, which is correct on current ImHex. If your build renders
+the CFG fields reversed (e.g. <code>als_en</code> landing in the low bits), add
+<code>#pragma bitfield_order right_to_left</code>&#8201;&#8212;&#8201;there is a comment in the file
+marking where.</p>
+</div>
+</td>
+</tr>
+</table>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_graphing_als_samples">7.5. Graphing ALS samples</h3>
+<div class="paragraph">
+<p>For a light-vs-time plot rather than a register snapshot, capture the
+triggered buffer with <strong>only</strong> the illuminance scan element enabled
+(timestamp off), so every record is a bare little-endian <code>u16</code> and the
+whole file is a clean stream of samples to plot:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-sh" data-lang="sh">cd /sys/bus/iio/devices/iio:device0
+echo 1 &gt; scan_elements/in_illuminance_en
+echo 0 &gt; scan_elements/in_timestamp_en      # pure u16 records -- no padding/timestamp
+echo envcombo-dev0 &gt; trigger/current_trigger
+echo 256 &gt; buffer/length
+echo 1 &gt; buffer/enable
+dd if=/dev/iio:device0 of=/tmp/als_lights.bin bs=2 count=256
+echo 0 &gt; buffer/enable</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>Send <code>als_lights.bin</code> to the host the same way as the register snapshot&#8201;&#8212;&#8201;start Step 1&#8217;s listener, then from the guest:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-sh" data-lang="sh">nc 10.0.2.2 7777 &lt; /tmp/als_lights.bin</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>Open it with <code>docs/imhex/envcombo-als-plot.hexpat</code>. Its
+<code>[[hex::visualize("line_plot", ...)]]</code>
+attribute draws light-vs-sample in ImHex&#8217;s visualizer pane&#8201;&#8212;&#8201;you&#8217;ll see
+the simulator&#8217;s sawtooth ramp.</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="images/imhex-plot-snapshot.png" alt="ImHex line_plot visualizer of the captured ALS samples" width="900">
+</div>
+<div class="title">Figure 2. ImHex <code>line_plot</code> of a captured ALS buffer&#8201;&#8212;&#8201;the simulator&#8217;s sawtooth ramp</div>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_full_records_with_timestamps">7.6. Full records with timestamps</h3>
+<div class="paragraph">
+<p>To inspect samples together with their timestamps instead of plotting,
+keep the timestamp scan element enabled during the capture. Each record is
+then 16 bytes&#8201;&#8212;&#8201;a <code>u16</code> light value, 6 bytes of padding, then an <code>s64</code>
+nanosecond timestamp.</p>
+</div>
+<div class="paragraph">
+<p>Capture on the guest:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-sh" data-lang="sh">cd /sys/bus/iio/devices/iio:device0
+echo 1 &gt; scan_elements/in_illuminance_en
+echo 1 &gt; scan_elements/in_timestamp_en      # timestamp ON -&gt; 16-byte records
+echo envcombo-dev0 &gt; trigger/current_trigger
+echo 256 &gt; buffer/length
+echo 1 &gt; buffer/enable
+dd if=/dev/iio:device0 of=/tmp/als_records.bin bs=16 count=256
+echo 0 &gt; buffer/enable</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>Send it to the host. On the host (WSL2), start a one-shot listener:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-sh" data-lang="sh">nc -l 7777 &gt; /mnt/c/Users/&lt;windows-user&gt;/als_records.bin</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>Then from the guest:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-sh" data-lang="sh">nc 10.0.2.2 7777 &lt; /tmp/als_records.bin</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>Open <code>als_records.bin</code> in ImHex with <code>docs/imhex/envcombo-als-records.hexpat</code>.</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="images/imhex-records-snapshot.png" alt="ImHex Pattern Data view of the decoded ALS records" width="900">
+</div>
+<div class="title">Figure 3. ImHex decoding the 16-byte ALS records&#8201;&#8212;&#8201;<code>light</code>, padding, and the <code>s64</code> nanosecond timestamp per sample</div>
+</div>
+</div>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_run_the_test_harness">8. Run the test harness</h2>
+<div class="sectionbody">
+<div class="paragraph">
+<p>The harness is self-contained: module-loading reloads both modules for a
+clean slate and every device test rebaselines first, so it can be run at any
+time (including right after the manual section above) without a reboot.</p>
+</div>
 <div class="listingblock">
 <div class="content">
 <pre class="highlight"><code class="language-shell" data-lang="shell">envcombo-test
@@ -740,7 +975,7 @@ echo $?             # 0 = all passed, 1 = at least one failure</code></pre>
 </div>
 <div class="listingblock">
 <div class="content">
-<pre>envcombo driver test harness (9 tests)
+<pre>envcombo driver test harness (9 tests, seed 4675903481288702464)
 [1/9] module-loading               PASS
 [2/9] direct-als-read              PASS
 [3/9] gain-and-integration-time    PASS
@@ -750,18 +985,29 @@ echo $?             # 0 = all passed, 1 = at least one failure</code></pre>
 [7/9] power-fsm-transitions        PASS
 [8/9] module-unloading             PASS
 [9/9] kernel-log-health            PASS
-RESULT: all 9 tests passed</pre>
+RESULT: all 9 tests passed (seed 4675903481288702464)</pre>
+</div>
+</div>
+<div class="paragraph">
+<p>The device tests (2&#8212;&#8203;7) run in a random order each time, seeded from the
+clock, to prove they are order-independent; module-loading stays first and
+module-unloading / kernel-log-health stay last. The seed is printed so a
+failing order can be replayed deterministically:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-shell" data-lang="shell">ENVCOMBO_TEST_SEED=4675903481288702464 envcombo-test   # or: envcombo-test --seed=4675903481288702464</code></pre>
 </div>
 </div>
 <div class="paragraph">
 <p>See <a href="test-harness.html">the test harness page</a> for what each test
 asserts. After a run, <code>dmesg | tail -20</code> should show only the clean
-unload/reload messages from test 8.</p>
+unload/reload messages from module-loading and module-unloading.</p>
 </div>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_check_the_driver_coding_style">8. Check the driver coding style</h2>
+<h2 id="_check_the_driver_coding_style">9. Check the driver coding style</h2>
 <div class="sectionbody">
 <div class="paragraph">
 <p>The driver follows the Linux kernel coding style. Verify it with the
@@ -806,7 +1052,7 @@ drift on the second and later continuation lines&#8201;&#8212;&#8201;review thos
 </div>
 </div>
 <div class="sect1">
-<h2 id="_troubleshooting">9. Troubleshooting</h2>
+<h2 id="_troubleshooting">10. Troubleshooting</h2>
 <div class="sectionbody">
 <table class="tableblock frame-all grid-all stretch">
 <colgroup>
@@ -852,7 +1098,7 @@ drift on the second and later continuation lines&#8201;&#8212;&#8201;review thos
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-12 15:52:33 +0300
+Last updated 2026-06-12 21:22:06 +0300
 </div>
 </div>
 </body>
