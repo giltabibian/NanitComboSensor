@@ -241,6 +241,36 @@ See link:test-harness.html[the test harness page] for what each test
 asserts. After a run, `dmesg | tail -20` should show only the clean
 unload/reload messages from test 8.
 
+== Check the driver coding style
+
+The driver follows the Linux kernel coding style. Verify it with the
+kernel's own `checkpatch.pl`. If you don't have a kernel tree handy, fetch
+the standalone script (plus its optional data files) and run it in file mode:
+
+[source,shell]
+----
+# fetch checkpatch and its optional data files:
+curl -fsSL -o /tmp/checkpatch.pl \
+    https://raw.githubusercontent.com/torvalds/linux/master/scripts/checkpatch.pl
+curl -fsSL -o /tmp/spelling.txt \
+    https://raw.githubusercontent.com/torvalds/linux/master/scripts/spelling.txt
+curl -fsSL -o /tmp/const_structs.checkpatch \
+    https://raw.githubusercontent.com/torvalds/linux/master/scripts/const_structs.checkpatch
+
+# check the driver source (file mode, no kernel tree, strict checks):
+perl /tmp/checkpatch.pl --no-tree --strict -f \
+    recipes-kernel/envcombo-driver/files/envcombo.c
+# expect: "total: 0 errors, 0 warnings, 0 checks"
+----
+
+`--no-tree` runs standalone, `--strict` enables the stricter `CHECK:`-level
+tests, and `-f` checks an existing file instead of a patch. Add `--terse` for
+one line per finding.
+
+NOTE: checkpatch only validates the first wrapped line of a multi-line
+statement against the opening parenthesis, so it does not catch alignment
+drift on the second and later continuation lines -- review those by eye.
+
 == Troubleshooting
 
 [cols="3,5", options="header"]
