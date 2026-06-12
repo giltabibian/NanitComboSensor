@@ -620,9 +620,10 @@ static int envcombo_probe(struct i2c_client *client)
 		return ret;
 
 	/*
-	 * INT_EN on, latched so a crossing is held until STATUS is read,
-	 * INT_POL left clear (active-low) to match the IRQF_TRIGGER_LOW
-	 * request below.
+	 * INT_EN on, latched so a crossing is held until STATUS is read.
+	 * The interrupt line pulses once per STATUS 0->1 transition, so
+	 * INT_POL is left clear (active-low) and the IRQ is requested as
+	 * falling-edge below.
 	 */
 	ret = envcombo_write_reg(client, ENVCOMBO_REG_INT_CFG,
 				  ENVCOMBO_INT_CFG_EN | ENVCOMBO_INT_CFG_LATCH);
@@ -648,7 +649,7 @@ static int envcombo_probe(struct i2c_client *client)
 
 	ret = devm_request_threaded_irq(dev, client->irq, NULL,
 					 envcombo_irq_thread,
-					 IRQF_TRIGGER_LOW | IRQF_ONESHOT,
+					 IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
 					 "envcombo", indio_dev);
 	if (ret)
 		return ret;
