@@ -189,6 +189,55 @@ fn expect_power_mode(expected: u8, when: &str) -> TestResult {
     Ok(())
 }
 
+/// Poll a non-blocking fd and read whatever is available into `buf`.
+/// Ok(None) on timeout, a wakeup without POLLIN, or EAGAIN; Ok(Some(n))
+/// when bytes were read. EINTR is retried, error conditions reported
+/// distinctly so they cannot masquerade as data or flaky failures.
+fn poll_read_nonblock(
+    fd: libc::c_int,
+    buf: &mut [u8],
+    timeout_ms: libc::c_int,
+) -> Result<Option<usize>, String> {
+    let mut pfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let ret = loop {
+        let ret = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+        let err = std::io::Error::last_os_error();
+        if ret < 0 && err.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        check!(ret >= 0, "poll: {}", err);
+        break ret;
+    };
+    if ret == 0 {
+        return Ok(None);
+    }
+    check!(
+        pfd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) == 0,
+        "fd error condition (revents {:#x})",
+        pfd.revents
+    );
+    if pfd.revents & libc::POLLIN == 0 {
+        return Ok(None);
+    }
+
+    loop {
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+        if n >= 0 {
+            return Ok(Some(n as usize));
+        }
+        let err = std::io::Error::last_os_error();
+        match err.kind() {
+            std::io::ErrorKind::Interrupted => continue,
+            std::io::ErrorKind::WouldBlock => return Ok(None),
+            _ => return Err(format!("read: {}", err)),
+        }
+    }
+}
+
 fn find_iio_device() -> Result<(PathBuf, PathBuf), String> {
     let dir = fs::read_dir("/sys/bus/iio/devices")
         .map_err(|e| format!("read /sys/bus/iio/devices: {}", e))?;
@@ -429,20 +478,51 @@ fn read_event(fd: &OwnedFd, timeout: Duration) -> Result<Option<(u64, i64)>, Str
         events: libc::POLLIN,
         revents: 0,
     };
-    let ret = unsafe { libc::poll(&mut pfd, 1, timeout.as_millis() as libc::c_int) };
-    check!(ret >= 0, "poll: {}", std::io::Error::last_os_error());
+    let ret = loop {
+        let ret = unsafe { libc::poll(&mut pfd, 1, timeout.as_millis() as libc::c_int) };
+        let err = std::io::Error::last_os_error();
+        if ret < 0 && err.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        check!(ret >= 0, "poll: {}", err);
+        break ret;
+    };
     if ret == 0 {
         return Ok(None);
     }
-
-    let mut buf = [0u8; 16];
-    let n = unsafe { libc::read(fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
     check!(
-        n == 16,
-        "event read returned {}: {}",
-        n,
-        std::io::Error::last_os_error()
+        pfd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) == 0,
+        "event fd error condition (revents {:#x})",
+        pfd.revents
     );
+    check!(
+        pfd.revents & libc::POLLIN != 0,
+        "poll woke without POLLIN (revents {:#x})",
+        pfd.revents
+    );
+
+    // Assemble the full 16-byte iio_event_data record; tolerate short
+    // reads and EINTR rather than misreporting them as protocol errors.
+    let mut buf = [0u8; 16];
+    let mut got = 0usize;
+    while got < buf.len() {
+        let n = unsafe {
+            libc::read(
+                fd.as_raw_fd(),
+                buf[got..].as_mut_ptr().cast(),
+                buf.len() - got,
+            )
+        };
+        if n < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(format!("event read after {} bytes: {}", got, err));
+        }
+        check!(n != 0, "event fd EOF after {} of 16 bytes", got);
+        got += n as usize;
+    }
     let id = u64::from_ne_bytes(buf[0..8].try_into().unwrap());
     let ts = i64::from_ne_bytes(buf[8..16].try_into().unwrap());
     Ok(Some((id, ts)))
