@@ -743,7 +743,7 @@ dmesg | tail -1     # "factory calibration overrides ALS integration time to 100
 <p>The simulator exposes its full register file at
 <code>/sys/kernel/debug/envcombo-sim/regs</code> (19 bytes, one byte per register,
 16-bit fields big-endian). Capturing that blob and decoding it with the
-<code>docs/envcombo-als.hexpat</code> pattern gives a field-by-field view of the
+<code>docs/imhex/envcombo-als.hexpat</code> pattern gives a field-by-field view of the
 device state at a chosen moment.</p>
 </div>
 <div class="paragraph">
@@ -759,7 +759,7 @@ resolves) and writes the file to a Windows-visible path.</p>
 </div>
 <div class="listingblock">
 <div class="content">
-<pre class="highlight"><code class="language-sh" data-lang="sh">nc -l 7777 &gt; /mnt/c/Users/gilta/regs.bin</code></pre>
+<pre class="highlight"><code class="language-sh" data-lang="sh">nc -l 7777 &gt; /mnt/c/Users/&lt;windows-user&gt;/regs.bin</code></pre>
 </div>
 </div>
 </div>
@@ -800,7 +800,7 @@ holds the snapshot.</p>
 <div class="sect2">
 <h3 id="_step_4decode_in_imhex_windows">7.4. Step 4&#8201;&#8212;&#8201;Decode in ImHex (Windows)</h3>
 <div class="paragraph">
-<p>Open <code>C:\Users\gilta\regs.bin</code>, load <code>docs/envcombo-als.hexpat</code>, and run
+<p>Open <code>C:\Users\&lt;windows-user&gt;\regs.bin</code>, load <code>docs/imhex/envcombo-als.hexpat</code>, and run
 it. The Pattern Data view should now show, for this capture:</p>
 </div>
 <div class="ulist">
@@ -825,7 +825,7 @@ from Step 1.</p>
 <div class="content">
 <img src="images/imhex-regs-snapshot.png" alt="ImHex Pattern Data view of the envcombo register dump" width="900">
 </div>
-<div class="title">Figure 1. ImHex decoding a register snapshot via <code>docs/envcombo-als.hexpat</code>&#8201;&#8212;&#8201;here the SLEEP baseline (<code>pwr_mode = Sleep</code>, a 100/800 threshold window)</div>
+<div class="title">Figure 1. ImHex decoding a register snapshot via <code>docs/imhex/envcombo-als.hexpat</code>&#8201;&#8212;&#8201;here the SLEEP baseline (<code>pwr_mode = Sleep</code>, a 100/800 threshold window)</div>
 </div>
 <div class="admonitionblock note">
 <table>
@@ -853,7 +853,7 @@ sysfs path above and is not used here.</p>
 </td>
 <td class="content">
 <div class="paragraph">
-<p><code>docs/envcombo-als.hexpat</code> uses typed enums inside bitfields and LSB-first
+<p><code>docs/imhex/envcombo-als.hexpat</code> uses typed enums inside bitfields and LSB-first
 bitfield order, which is correct on current ImHex. If your build renders
 the CFG fields reversed (e.g. <code>als_en</code> landing in the low bits), add
 <code>#pragma bitfield_order right_to_left</code>&#8201;&#8212;&#8201;there is a comment in the file
@@ -893,7 +893,7 @@ echo 0 &gt; buffer/enable</code></pre>
 </div>
 </div>
 <div class="paragraph">
-<p>Open it with <code>docs/envcombo-als-plot.hexpat</code>. Its
+<p>Open it with <code>docs/imhex/envcombo-als-plot.hexpat</code>. Its
 <code>[[hex::visualize("line_plot", ...)]]</code>
 attribute draws light-vs-sample in ImHex&#8217;s visualizer pane&#8201;&#8212;&#8201;you&#8217;ll see
 the simulator&#8217;s sawtooth ramp.</p>
@@ -929,7 +929,15 @@ echo 0 &gt; buffer/enable</code></pre>
 </div>
 </div>
 <div class="paragraph">
-<p>Send it to the host (Step 1&#8217;s listener running), then from the guest:</p>
+<p>Send it to the host. On the host (WSL2), start a one-shot listener:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-sh" data-lang="sh">nc -l 7777 &gt; /mnt/c/Users/&lt;windows-user&gt;/als_records.bin</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>Then from the guest:</p>
 </div>
 <div class="listingblock">
 <div class="content">
@@ -937,21 +945,7 @@ echo 0 &gt; buffer/enable</code></pre>
 </div>
 </div>
 <div class="paragraph">
-<p>Open <code>als_records.bin</code> in ImHex with this pattern:</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-c" data-lang="c">#pragma endian little
-import std.mem;
-
-struct Sample {
-    u16 light;
-    padding[6];
-    s64 timestamp_ns;
-};
-
-Sample samples[while(!std::mem::eof())] @ 0x00;</code></pre>
-</div>
+<p>Open <code>als_records.bin</code> in ImHex with <code>docs/imhex/envcombo-als-records.hexpat</code>.</p>
 </div>
 </div>
 </div>
@@ -1098,7 +1092,7 @@ drift on the second and later continuation lines&#8201;&#8212;&#8201;review thos
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-12 20:00:32 +0300
+Last updated 2026-06-12 20:07:01 +0300
 </div>
 </div>
 </body>
