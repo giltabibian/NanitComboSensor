@@ -105,7 +105,7 @@ Manual load/unload (e.g. after testing or to re-probe):
 
 [source,shell]
 ----
-rmmod envcombo && rmmod i2c-envcombo-sim
+rmmod envcombo && rmmod i2c_envcombo_sim
 modprobe i2c-envcombo-sim && modprobe envcombo
 dmesg | tail
 ----
