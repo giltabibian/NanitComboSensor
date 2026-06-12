@@ -488,7 +488,7 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <p>poky, scarthgap branch (<code>git clone -b scarthgap git://git.yoctoproject.org/poky</code>)</p>
 </li>
 <li>
-<p>checked out to the yocto-5.0.18 tag</p>
+<p>checked out to the <code>yocto-5.0.18</code> tag</p>
 </li>
 <li>
 <p>The usual Yocto host packages for your distro</p>
@@ -563,6 +563,10 @@ ls tmp/work/qemuarm64-poky-linux/envcombo-driver/1.0/envcombo.ko \
 <div class="listingblock">
 <div class="content">
 <pre class="highlight"><code class="language-shell" data-lang="shell">runqemu qemuarm64 envcombo-image nographic slirp
+
+# if runqemu cannot resolve the image by name, point it at the qemuboot file:
+runqemu tmp/deploy/images/qemuarm64/envcombo-image-qemuarm64.rootfs.qemuboot.conf \
+        nographic slirp
 
 # add "snapshot" to keep the rootfs pristine across runs; exit QEMU with Ctrl-A x</code></pre>
 </div>
@@ -849,7 +853,7 @@ drift on the second and later continuation lines&#8201;&#8212;&#8201;review thos
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-12 15:28:08 +0300
+Last updated 2026-06-12 15:50:03 +0300
 </div>
 </div>
 </body>

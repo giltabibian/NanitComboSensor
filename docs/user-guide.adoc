@@ -70,6 +70,10 @@ ls tmp/work/qemuarm64-poky-linux/envcombo-driver/1.0/envcombo.ko \
 ----
 runqemu qemuarm64 envcombo-image nographic slirp
 
+# if runqemu cannot resolve the image by name, point it at the qemuboot file:
+runqemu tmp/deploy/images/qemuarm64/envcombo-image-qemuarm64.rootfs.qemuboot.conf \
+        nographic slirp
+
 # add "snapshot" to keep the rootfs pristine across runs; exit QEMU with Ctrl-A x
 ----
 
