@@ -70,6 +70,7 @@ fn main() {
         ("threshold-attributes", test_threshold_attrs),
         ("threshold-events", test_events),
         ("triggered-buffer", test_buffer),
+        ("power-fsm-transitions", test_power_fsm),
         ("module-unloading", test_unload),
         ("kernel-log-health", test_kernel_log),
     ];
@@ -620,6 +621,108 @@ fn test_buffer(ctx: &mut Ctx) -> TestResult {
     check!(teardown.is_empty(), "buffer teardown failed{}", teardown);
 
     expect_power_mode(PWR_SLEEP, "after disabling buffer")?;
+    Ok(())
+}
+
+fn set_buffer(ctx: &Ctx, on: bool) -> TestResult {
+    if on {
+        sysfs_write(&attr(ctx, "scan_elements/in_illuminance_en"), "1")?;
+        sysfs_write(&attr(ctx, "scan_elements/in_timestamp_en"), "1")?;
+        sysfs_write(&attr(ctx, "trigger/current_trigger"), &ctx.trigger)?;
+        sysfs_write(&attr(ctx, "buffer/enable"), "1")?;
+    } else {
+        sysfs_write(&attr(ctx, "buffer/enable"), "0")?;
+        sysfs_write(&attr(ctx, "scan_elements/in_illuminance_en"), "0")?;
+        sysfs_write(&attr(ctx, "scan_elements/in_timestamp_en"), "0")?;
+    }
+    Ok(())
+}
+
+/// Wait until at least one full buffered sample can be read, proving the
+/// interrupt -> trigger -> buffer data path is currently alive.
+fn expect_buffer_alive(ctx: &Ctx, timeout: Duration) -> TestResult {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&ctx.chardev)
+        .map_err(|e| format!("open {}: {}", ctx.chardev.display(), e))?;
+    // Drain any backlog so only samples produced from now on count.
+    loop {
+        let mut chunk = [0u8; 64];
+        let n = unsafe { libc::read(file.as_raw_fd(), chunk.as_mut_ptr().cast(), chunk.len()) };
+        if n <= 0 {
+            break;
+        }
+    }
+
+    let deadline = Instant::now() + timeout;
+    let mut got = 0usize;
+    while got < 16 && Instant::now() < deadline {
+        let mut pfd = libc::pollfd {
+            fd: file.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ret = unsafe { libc::poll(&mut pfd, 1, 500) };
+        check!(ret >= 0, "poll buffer: {}", std::io::Error::last_os_error());
+        if ret == 0 {
+            continue;
+        }
+        let mut chunk = [0u8; 64];
+        let n = unsafe { libc::read(file.as_raw_fd(), chunk.as_mut_ptr().cast(), chunk.len()) };
+        check!(n >= 0, "read buffer: {}", std::io::Error::last_os_error());
+        got += n as usize;
+    }
+    check!(got >= 16, "no buffered sample within {:?}", timeout);
+    Ok(())
+}
+
+/// Power-state machine transitions across *combinations* of users. The
+/// single-user transitions are covered by the event/buffer tests; this
+/// exercises the cases where one of two active users goes away and the
+/// device must stay in CONTINUOUS for the remaining one.
+fn test_power_fsm(ctx: &mut Ctx) -> TestResult {
+    let ev_en = attr(ctx, "events/in_illuminance_thresh_either_en");
+    let raw = attr(ctx, "in_illuminance_raw");
+
+    // Thresholds were left spanning the full range, so enabling the event
+    // here produces no crossings; only the power state is of interest.
+    expect_power_mode(PWR_SLEEP, "at start")?;
+
+    sysfs_write(&ev_en, "1")?;
+    expect_power_mode(PWR_CONTINUOUS, "with events on")?;
+
+    set_buffer(ctx, true)?;
+    let result = (|| -> TestResult {
+        expect_power_mode(PWR_CONTINUOUS, "with events+buffer on")?;
+
+        // A direct read while users are active must use the latched data
+        // path and leave the device in CONTINUOUS (no one-shot detour).
+        read_u32(&raw)?;
+        expect_power_mode(PWR_CONTINUOUS, "after raw read while active")?;
+
+        // Key transition: dropping one of two users keeps the device
+        // running, and the surviving data path still delivers samples.
+        sysfs_write(&ev_en, "0")?;
+        expect_power_mode(PWR_CONTINUOUS, "with buffer on after events off")?;
+        expect_buffer_alive(ctx, Duration::from_secs(3))?;
+
+        // And the mirror image: buffer off while events are back on.
+        sysfs_write(&ev_en, "1")?;
+        Ok(())
+    })();
+    let teardown = set_buffer(ctx, false);
+    result?;
+    teardown?;
+
+    expect_power_mode(PWR_CONTINUOUS, "with events on after buffer off")?;
+
+    // Last user gone: back to SLEEP, and the one-shot path must work again.
+    sysfs_write(&ev_en, "0")?;
+    expect_power_mode(PWR_SLEEP, "with all users off")?;
+    read_u32(&raw)?;
+    expect_power_mode(PWR_SLEEP, "after one-shot from sleep")?;
     Ok(())
 }
 
