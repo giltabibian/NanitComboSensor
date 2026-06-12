@@ -94,32 +94,26 @@ static int envcombo_update_bits(struct i2c_client *client, u8 reg, u8 mask, u8 v
 	return envcombo_write_reg(client, reg, (ret & ~mask) | (val & mask));
 }
 
-/* 16-bit big-endian register pair (MSB first). */
+/*
+ * 16-bit big-endian register pair (MSB first), accessed as a single bus
+ * transaction so the device cannot update the pair (e.g. latch a new ALS
+ * sample in continuous mode) between the two byte accesses.
+ */
 static int envcombo_read_reg16(struct i2c_client *client, u8 reg, u16 *val)
 {
-	int msb, lsb;
+	int ret;
 
-	msb = envcombo_read_reg(client, reg);
-	if (msb < 0)
-		return msb;
+	ret = i2c_smbus_read_word_swapped(client, reg);
+	if (ret < 0)
+		return ret;
 
-	lsb = envcombo_read_reg(client, reg + 1);
-	if (lsb < 0)
-		return lsb;
-
-	*val = ((u16)msb << 8) | (u16)lsb;
+	*val = ret;
 	return 0;
 }
 
 static int envcombo_write_reg16(struct i2c_client *client, u8 reg, u16 val)
 {
-	int ret;
-
-	ret = envcombo_write_reg(client, reg, val >> 8);
-	if (ret < 0)
-		return ret;
-
-	return envcombo_write_reg(client, reg + 1, val & 0xFF);
+	return i2c_smbus_write_word_swapped(client, reg, val);
 }
 
 struct envcombo_data {
@@ -132,6 +126,8 @@ struct envcombo_data {
 	u8 als_time_idx;
 	u8 calib_again;
 	u8 calib_atime;
+	/* (integer, micro) pair advertised when CAL_ATIME fixes the time */
+	int calib_time_avail[2];
 
 	u16 thresh_low;
 	u16 thresh_high;
@@ -284,6 +280,8 @@ static int envcombo_read_avail(struct iio_dev *indio_dev,
 				const int **vals, int *type, int *length,
 				long mask)
 {
+	struct envcombo_data *data = iio_priv(indio_dev);
+
 	switch (mask) {
 	case IIO_CHAN_INFO_HARDWAREGAIN:
 		*vals = envcombo_als_gain_table;
@@ -292,6 +290,12 @@ static int envcombo_read_avail(struct iio_dev *indio_dev,
 		return IIO_AVAIL_LIST;
 
 	case IIO_CHAN_INFO_INT_TIME:
+		if (data->calib_atime) {
+			*vals = data->calib_time_avail;
+			*type = IIO_VAL_INT_PLUS_MICRO;
+			*length = ARRAY_SIZE(data->calib_time_avail);
+			return IIO_AVAIL_LIST;
+		}
 		*vals = envcombo_als_time_avail;
 		*type = IIO_VAL_INT_PLUS_MICRO;
 		*length = ARRAY_SIZE(envcombo_als_time_avail);
@@ -617,7 +621,8 @@ static int envcombo_probe(struct i2c_client *client)
 		return -EINVAL;
 
 	if (!i2c_check_functionality(client->adapter,
-				      I2C_FUNC_SMBUS_BYTE_DATA))
+				      I2C_FUNC_SMBUS_BYTE_DATA |
+				      I2C_FUNC_SMBUS_WORD_DATA))
 		return -EOPNOTSUPP;
 
 	indio_dev = devm_iio_device_alloc(dev, sizeof(*data));
@@ -650,10 +655,13 @@ static int envcombo_probe(struct i2c_client *client)
 	if (ret < 0)
 		return ret;
 	data->calib_atime = ret;
-	if (data->calib_atime)
+	if (data->calib_atime) {
+		data->calib_time_avail[0] = 0;
+		data->calib_time_avail[1] = data->calib_atime * 1000;
 		dev_warn(dev,
 			 "factory calibration overrides ALS integration time to %u ms; integration_time is read-only\n",
 			 data->calib_atime);
+	}
 
 	data->als_gain_idx = ENVCOMBO_DEFAULT_GAIN_IDX;
 	data->als_time_idx = ENVCOMBO_DEFAULT_TIME_IDX;
