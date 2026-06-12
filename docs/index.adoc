@@ -1,0 +1,52 @@
+= ENV-COMBO IIO Driver -- Documentation
+:toc:
+:sectnums!:
+
+Linux IIO driver for the fictional ENV-COMBO I2C combo sensor (ambient
+light / temperature / humidity; only the ALS path is in scope), packaged as
+a self-contained Yocto layer (`meta-nanit-envcombo`) together with the
+provided device simulator and a Rust end-to-end test harness.
+
+[cols="2,5", options="header"]
+|===
+| Page | Contents
+
+| link:architecture.html[1. Architecture & Design]
+| Hardware model and register map, driver components and locking, the
+  power-mode state machine, ALS usage flows (probe, one-shot read,
+  threshold events, triggered buffer), the userspace ABI, and the design
+  decisions with their tradeoffs.
+
+| link:test-harness.html[2. Test Harness]
+| The Rust end-to-end test harness: test plan and block diagram of the
+  harness / driver / simulator stack, what each of the 9 tests asserts and
+  how it can fail, and the cross-checking strategy against the simulator's
+  debugfs register file.
+
+| link:user-guide.html[3. Installation, Build & Run]
+| Step-by-step: adding the layer, building the image, booting it in QEMU,
+  loading/unloading the modules, exercising every driver feature manually
+  from the shell (raw reads, gain/integration time, thresholds, events,
+  triggered buffer), inspecting device registers, and running the test
+  harness.
+|===
+
+== Quick orientation
+
+[cols="3,4", options="header"]
+|===
+| Path | Role
+
+| `recipes-kernel/envcombo-driver/` | The IIO driver module recipe + source
+| `recipes-kernel/envcombo-sim/` | Provided bus/device simulator recipe + source
+| `recipes-kernel/linux/` | Kernel config fragment (IIO core, buffer, trigger)
+| `recipes-utils/envcombo-test/` | Rust test harness recipe + source
+| `recipes-core/images/envcombo-image.bb` | Test image (core-image-minimal + the above)
+| `conf/layer.conf` | Layer registration (scarthgap)
+| `docs/` | This documentation; PlantUML sources in `docs/diagrams/`
+|===
+
+NOTE: Diagrams are maintained as PlantUML sources in
+`+docs/diagrams/*.puml+` and embedded as rendered SVGs. After editing,
+regenerate with `+plantuml -tsvg docs/diagrams/*.puml+`; render the HTML
+pages with `+asciidoctor docs/*.adoc+`.

@@ -14,35 +14,30 @@ participant "IRQ thread" as IRQ
 participant "ENV-COMBO\ndevice (CONTINUOUS)" as HW
 
 == Configuration ==
-US -> IIO : write thresh_rising_value /\nthresh_falling_value
+US -> IIO : write thresh_rising_value (high) /\nthresh_falling_value (low)
 IIO -> DRV : write_event_value
-DRV -> HW : ALS_TH_HIGH / ALS_TH_LOW\n(validated: rising >= falling)
-US -> IIO : write thresh_*_en = 1
+DRV -> HW : ALS_TH_HIGH / ALS_TH_LOW\n(validated: low <= high, 0..65535)
+US -> IIO : write thresh_either_en = 1
 IIO -> DRV : write_event_config
-DRV -> HW : INT_CFG.INT_EN <- 1\nPWR_MODE <- CONTINUOUS
+DRV -> HW : PWR_MODE <- CONTINUOUS\n(INT_EN already set at probe)
 US -> US : open /dev/iio:deviceN,\nioctl(IIO_GET_EVENT_FD_IOCTL),\npoll(event_fd)
 
 == Crossing detected ==
-HW -> HW : conversion crosses threshold\n(in-range -> out-of-range):\nALS_RDY=1, ALS_INT=1
-HW -> IRQ : INT pulse
+HW -> HW : conversion leaves the [low, high]\nwindow (in-range -> out-of-range):\nALS_RDY=1, ALS_INT=1 (latched)
+HW -> IRQ : INT pulse (falling edge)
 activate IRQ
 IRQ -> HW : read STATUS (clears + re-arms)
-note right of IRQ : ALS_RDY also serviced from\nthe same read (completion /\nbuffer trigger if active)
-IRQ -> HW : read ALS_OUT
-note over IRQ
-  HW reports only "a threshold was
-  crossed" -- direction recovered by
-  comparing the sample against the
-  shadowed thresholds:
-end note
-alt value >= thresh_high && rising_en
-  IRQ -> IIO : iio_push_event(THRESH, RISING)
+note right of IRQ : ALS_RDY is serviced from the\nsame read (completion / buffer\ntrigger if active)
+opt ALS_INT set && events enabled
+  IRQ -> IIO : iio_push_event(THRESH, EITHER)
   IIO --> US : POLLIN -> read iio_event_data
-else value <= thresh_low && falling_en
-  IRQ -> IIO : iio_push_event(THRESH, FALLING)
-  IIO --> US : POLLIN -> read iio_event_data
-else value already back in range
-  IRQ -> IRQ : event dropped,\nnot misreported
 end
 deactivate IRQ
+note over US, HW
+  The hardware reports only "a threshold was crossed", with no
+  direction, so the event is delivered as IIO_EV_DIR_EITHER per the
+  datasheet. Userspace reads in_illuminance_raw if it needs to know
+  which side of the window the value is on. No further event fires
+  until the value returns inside the window and crosses out again.
+end note
 @enduml

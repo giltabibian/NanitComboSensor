@@ -26,11 +26,21 @@ bitbake envcombo-image
 runqemu qemuarm64 nographic slirp
 # Login: root (no password)
 
-# Load modules and run tests
-modprobe i2c-envcombo-sim
-modprobe envcombo
+# Both modules autoload at boot; just run the tests
 envcombo-test
 ```
+
+## Documentation
+
+Full documentation lives in [`docs/`](docs/index.adoc) (rendered HTML
+alongside the sources):
+
+1. [Architecture & Design](docs/architecture.adoc) — register map, driver
+   components, power FSM, usage flows, ABI, design decisions.
+2. [Test Harness](docs/test-harness.adoc) — test plan, block diagram of the
+   harness/driver/simulator stack, per-test assertions.
+3. [Installation, Build & Run](docs/user-guide.adoc) — every build, boot,
+   and manual-verification command, step by step.
 
 ## Layer contents
 

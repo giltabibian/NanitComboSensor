@@ -1,0 +1,45 @@
+@startuml test-stack
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam rectangle {
+  BackgroundColor #FDFDFD
+  BorderColor #444444
+}
+
+rectangle "Userspace" as US {
+  component "envcombo-test (Rust)\n9 sequential tests, PASS/FAIL per test,\nexit code = number of failures" as TEST
+}
+
+rectangle "Kernel interfaces exercised" as IF {
+  component "sysfs\nraw / scale / gain / int_time\nthresholds / event enable\nbuffer + scan_elements + trigger" as SYSFS
+  component "/dev/iio:deviceN\nscan records (poll + read)\nevent fd (IIO_GET_EVENT_FD_IOCTL)" as CHRDEV
+  component "debugfs\n/sys/kernel/debug/envcombo-sim/regs\nside-effect-free register snapshot" as DBGFS
+  component "module control\nmodprobe / rmmod\n/sys/module, dmesg" as MOD
+}
+
+rectangle "Kernel" as K {
+  component "IIO core" as IIO
+  component "envcombo driver\n(device under test)" as DRV
+  component "i2c-envcombo-sim\nI2C adapter + ENV-COMBO model\n+ IRQ domain" as SIM
+}
+
+TEST --> SYSFS : configure & read back
+TEST --> CHRDEV : samples & events
+TEST --> DBGFS : assert device register\nstate (CFG, TH_*, PWR_MODE)
+TEST --> MOD : load / unload cycle,\nkernel-log health scan
+
+SYSFS --> IIO
+CHRDEV --> IIO
+IIO --> DRV
+DRV --> SIM : SMBus byte/word
+SIM --> DRV : INT (falling edge)
+DBGFS ..> SIM : reads simulator state\ndirectly, bypassing the driver
+
+note bottom of DBGFS
+  The debugfs path is the harness's independent
+  ground truth: driver claims (sysfs readbacks)
+  are cross-checked against what actually
+  landed in the device registers.
+end note
+@enduml

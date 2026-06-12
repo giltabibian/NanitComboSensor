@@ -15,8 +15,8 @@ state "CONTINUOUS (0x03)" as CONT
 SLEEP --> ONESHOT : sysfs read of in_illuminance_raw\nwhile idle (no buffer, no events)
 ONESHOT --> SLEEP : conversion done (HW auto-return):\nALS_OUT latched, ALS_RDY set, INT pulses
 
-SLEEP --> CONT : buffer enabled OR any\nthreshold event enabled
-CONT --> SLEEP : last consumer disabled\n(!buffer_en && !ev_en_rising && !ev_en_falling)
+SLEEP --> CONT : buffer enabled OR\nthreshold event enabled
+CONT --> SLEEP : last consumer disabled\n(!buffer_en && !ev_en)
 
 note right of ONESHOT
   Transient state, used only for

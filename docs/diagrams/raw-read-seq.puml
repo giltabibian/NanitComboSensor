@@ -28,8 +28,7 @@ note right : clears all bits,\nre-arms interrupt
 IRQ -> DRV : complete(als_done)
 deactivate IRQ
 
-DRV -> HW : read ALS_OUT MSB
-DRV -> HW : read ALS_OUT LSB
+DRV -> HW : read ALS_OUT\n(one 16-bit word transaction)
 DRV -> DRV : mutex_unlock
 DRV --> US : raw value
 deactivate DRV

@@ -8,7 +8,7 @@ skinparam activity {
 
 start
 :check client->irq wired and
-SMBus byte-data functionality;
+SMBus byte + word functionality;
 :devm_iio_device_alloc
 init mutex + completion;
 if (WHO_AM_I == 0xEB ?) then (yes)
@@ -30,7 +30,7 @@ ALS_TH_HIGH <- 0xFFFF
 :PWR_MODE <- SLEEP
 (stay low-power until first consumer);
 :devm_request_threaded_irq
-(NULL primary, IRQF_TRIGGER_LOW | ONESHOT);
+(NULL primary, IRQF_TRIGGER_FALLING | ONESHOT);
 :devm_iio_trigger_alloc + register
 ("envcombo-devN");
 :devm_iio_triggered_buffer_setup
