@@ -463,7 +463,8 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </ul>
 </li>
 <li><a href="#_run_the_test_harness">7. Run the test harness</a></li>
-<li><a href="#_troubleshooting">8. Troubleshooting</a></li>
+<li><a href="#_check_the_driver_coding_style">8. Check the driver coding style</a></li>
+<li><a href="#_troubleshooting">9. Troubleshooting</a></li>
 </ul>
 </div>
 </div>
@@ -761,7 +762,52 @@ unload/reload messages from test 8.</p>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_troubleshooting">8. Troubleshooting</h2>
+<h2 id="_check_the_driver_coding_style">8. Check the driver coding style</h2>
+<div class="sectionbody">
+<div class="paragraph">
+<p>The driver follows the Linux kernel coding style. Verify it with the
+kernel&#8217;s own <code>checkpatch.pl</code>. If you don&#8217;t have a kernel tree handy, fetch
+the standalone script (plus its optional data files) and run it in file mode:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-shell" data-lang="shell"># fetch checkpatch and its optional data files:
+curl -fsSL -o /tmp/checkpatch.pl \
+    https://raw.githubusercontent.com/torvalds/linux/master/scripts/checkpatch.pl
+curl -fsSL -o /tmp/spelling.txt \
+    https://raw.githubusercontent.com/torvalds/linux/master/scripts/spelling.txt
+curl -fsSL -o /tmp/const_structs.checkpatch \
+    https://raw.githubusercontent.com/torvalds/linux/master/scripts/const_structs.checkpatch
+
+# check the driver source (file mode, no kernel tree, strict checks):
+perl /tmp/checkpatch.pl --no-tree --strict -f \
+    recipes-kernel/envcombo-driver/files/envcombo.c
+# expect: "total: 0 errors, 0 warnings, 0 checks"</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p><code>--no-tree</code> runs standalone, <code>--strict</code> enables the stricter <code>CHECK:</code>-level
+tests, and <code>-f</code> checks an existing file instead of a patch. Add <code>--terse</code> for
+one line per finding.</p>
+</div>
+<div class="admonitionblock note">
+<table>
+<tr>
+<td class="icon">
+<div class="title">Note</div>
+</td>
+<td class="content">
+checkpatch only validates the first wrapped line of a multi-line
+statement against the opening parenthesis, so it does not catch alignment
+drift on the second and later continuation lines&#8201;&#8212;&#8201;review those by eye.
+</td>
+</tr>
+</table>
+</div>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_troubleshooting">9. Troubleshooting</h2>
 <div class="sectionbody">
 <table class="tableblock frame-all grid-all stretch">
 <colgroup>
@@ -807,7 +853,7 @@ unload/reload messages from test 8.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-12 14:55:45 +0300
+Last updated 2026-06-12 15:21:42 +0300
 </div>
 </div>
 </body>
