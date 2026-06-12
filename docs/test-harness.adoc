@@ -15,7 +15,7 @@ fetchable.
 
 == Test stack
 
-image::diagrams/test-stack.svg[Test stack block diagram]
+image::diagrams/svg/test-stack.svg[Test stack block diagram]
 
 Three properties make the tests able to fail when behavior is wrong, rather
 than being superficial smoke checks:

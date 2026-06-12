@@ -11,8 +11,8 @@ ENV-COMBO I2C combo sensor. Only the ambient-light (ALS, `IIO_LIGHT`) path is
 implemented; temperature and humidity are out of scope for this assignment.
 
 NOTE: Diagrams are maintained as PlantUML sources in `+docs/diagrams/*.puml+`
-and embedded as rendered SVGs. Regenerate after editing with
-`+plantuml -tsvg docs/diagrams/*.puml+`.
+and embedded as SVGs rendered into `docs/diagrams/svg/`. Regenerate after
+editing with `+plantuml -tsvg -o svg docs/diagrams/*.puml+`.
 
 == System Overview
 
@@ -23,7 +23,7 @@ device, and delivers interrupts through a software IRQ domain. The driver is
 completely unaware of the simulator -- it would bind unchanged to real
 hardware exposing the same register map.
 
-image::diagrams/system-overview.svg[System overview block diagram]
+image::diagrams/svg/system-overview.svg[System overview block diagram]
 
 == Hardware Model (ALS-relevant subset)
 
@@ -118,7 +118,7 @@ currently active consumers. Two boolean inputs drive the FSM: `buffer_en`
 changes; ONE-SHOT is a transient state used only for on-demand raw reads
 while otherwise idle.
 
-image::diagrams/power-fsm.svg[Power-mode state machine]
+image::diagrams/svg/power-fsm.svg[Power-mode state machine]
 
 While CONTINUOUS is active, a sysfs raw read skips the ONE-SHOT round-trip
 and simply reads the latched ALS_OUT registers -- they are refreshed every
@@ -128,14 +128,14 @@ cycle anyway.
 
 === Probe / initialization
 
-image::diagrams/probe-flow.svg[Probe / initialization flow]
+image::diagrams/svg/probe-flow.svg[Probe / initialization flow]
 
 === On-demand raw read (one-shot path)
 
 `cat /sys/bus/iio/devices/iio:deviceN/in_illuminance_raw` while no buffer or
 event is active:
 
-image::diagrams/raw-read-seq.svg[On-demand raw read sequence]
+image::diagrams/svg/raw-read-seq.svg[On-demand raw read sequence]
 
 === Threshold event flow
 
@@ -145,7 +145,7 @@ single `..._thresh_either_en` switch. Enabling it drives the FSM to
 CONTINUOUS (`INT_CFG.INT_EN` is already set at probe, since the data-ready
 interrupt is needed for one-shot reads too).
 
-image::diagrams/event-flow-seq.svg[Threshold event delivery sequence]
+image::diagrams/svg/event-flow-seq.svg[Threshold event delivery sequence]
 
 The hardware reports only "a threshold was crossed" via the single
 direction-less `ALS_INT` bit, so the event spec follows the datasheet: the
@@ -164,7 +164,7 @@ The driver registers its own IRQ-backed trigger; no external trigger is
 needed. Enabling the buffer drives the FSM to CONTINUOUS, and every
 conversion produces one scan record.
 
-image::diagrams/buffer-flow-seq.svg[Triggered buffer capture sequence]
+image::diagrams/svg/buffer-flow-seq.svg[Triggered buffer capture sequence]
 
 == Userspace ABI
 

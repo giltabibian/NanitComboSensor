@@ -490,8 +490,8 @@ implemented; temperature and humidity are out of scope for this assignment.</p>
 </td>
 <td class="content">
 Diagrams are maintained as PlantUML sources in <code>docs/diagrams/*.puml</code>
-and embedded as rendered SVGs. Regenerate after editing with
-<code>plantuml -tsvg docs/diagrams/*.puml</code>.
+and embedded as SVGs rendered into <code>docs/diagrams/svg/</code>. Regenerate after
+editing with <code>plantuml -tsvg -o svg docs/diagrams/*.puml</code>.
 </td>
 </tr>
 </table>
@@ -511,7 +511,7 @@ hardware exposing the same register map.</p>
 </div>
 <div class="imageblock">
 <div class="content">
-<img src="diagrams/system-overview.svg" alt="System overview block diagram">
+<img src="diagrams/svg/system-overview.svg" alt="System overview block diagram">
 </div>
 </div>
 </div>
@@ -688,7 +688,7 @@ while otherwise idle.</p>
 </div>
 <div class="imageblock">
 <div class="content">
-<img src="diagrams/power-fsm.svg" alt="Power-mode state machine">
+<img src="diagrams/svg/power-fsm.svg" alt="Power-mode state machine">
 </div>
 </div>
 <div class="paragraph">
@@ -706,7 +706,7 @@ cycle anyway.</p>
 <h3 id="_probe_initialization">4.1. Probe / initialization</h3>
 <div class="imageblock">
 <div class="content">
-<img src="diagrams/probe-flow.svg" alt="Probe / initialization flow">
+<img src="diagrams/svg/probe-flow.svg" alt="Probe / initialization flow">
 </div>
 </div>
 </div>
@@ -718,7 +718,7 @@ event is active:</p>
 </div>
 <div class="imageblock">
 <div class="content">
-<img src="diagrams/raw-read-seq.svg" alt="On-demand raw read sequence">
+<img src="diagrams/svg/raw-read-seq.svg" alt="On-demand raw read sequence">
 </div>
 </div>
 </div>
@@ -733,7 +733,7 @@ interrupt is needed for one-shot reads too).</p>
 </div>
 <div class="imageblock">
 <div class="content">
-<img src="diagrams/event-flow-seq.svg" alt="Threshold event delivery sequence">
+<img src="diagrams/svg/event-flow-seq.svg" alt="Threshold event delivery sequence">
 </div>
 </div>
 <div class="paragraph">
@@ -759,7 +759,7 @@ conversion produces one scan record.</p>
 </div>
 <div class="imageblock">
 <div class="content">
-<img src="diagrams/buffer-flow-seq.svg" alt="Triggered buffer capture sequence">
+<img src="diagrams/svg/buffer-flow-seq.svg" alt="Triggered buffer capture sequence">
 </div>
 </div>
 </div>
@@ -951,7 +951,7 @@ state to leave behind on unbind.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-12 13:43:31 +0300
+Last updated 2026-06-12 14:24:34 +0300
 </div>
 </div>
 </body>

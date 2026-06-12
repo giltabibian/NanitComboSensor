@@ -47,6 +47,7 @@ provided device simulator and a Rust end-to-end test harness.
 |===
 
 NOTE: Diagrams are maintained as PlantUML sources in
-`+docs/diagrams/*.puml+` and embedded as rendered SVGs. After editing,
-regenerate with `+plantuml -tsvg docs/diagrams/*.puml+`; render the HTML
-pages with `+asciidoctor docs/*.adoc+`.
+`+docs/diagrams/*.puml+`; the rendered SVG artifacts live separately in
+`docs/diagrams/svg/`. After editing, regenerate with
+`+plantuml -tsvg -o svg docs/diagrams/*.puml+` (the `-o` path is relative
+to the sources); render the HTML pages with `+asciidoctor docs/*.adoc+`.

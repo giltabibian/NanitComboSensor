@@ -547,9 +547,10 @@ provided device simulator and a Rust end-to-end test harness.</p>
 </td>
 <td class="content">
 Diagrams are maintained as PlantUML sources in
-<code>docs/diagrams/*.puml</code> and embedded as rendered SVGs. After editing,
-regenerate with <code>plantuml -tsvg docs/diagrams/*.puml</code>; render the HTML
-pages with <code>asciidoctor docs/*.adoc</code>.
+<code>docs/diagrams/*.puml</code>; the rendered SVG artifacts live separately in
+<code>docs/diagrams/svg/</code>. After editing, regenerate with
+<code>plantuml -tsvg -o svg docs/diagrams/*.puml</code> (the <code>-o</code> path is relative
+to the sources); render the HTML pages with <code>asciidoctor docs/*.adoc</code>.
 </td>
 </tr>
 </table>
@@ -559,7 +560,7 @@ pages with <code>asciidoctor docs/*.adoc</code>.
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-12 13:43:42 +0300
+Last updated 2026-06-12 14:24:37 +0300
 </div>
 </div>
 </body>
