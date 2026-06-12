@@ -289,6 +289,41 @@ left it. Writing register bytes *into* debugfs is not equivalent to the
 sysfs path above and is not used here.
 ====
 
+=== Graphing ALS samples
+
+For a light-vs-time plot rather than a register snapshot, capture the
+triggered buffer with *only* the illuminance scan element enabled
+(timestamp off), so every record is a bare little-endian `u16` and the
+whole file is a clean stream of samples to plot:
+
+[source,sh]
+----
+cd /sys/bus/iio/devices/iio:device0
+echo 1 > scan_elements/in_illuminance_en
+echo 0 > scan_elements/in_timestamp_en      # pure u16 records -- no padding/timestamp
+echo envcombo-dev0 > trigger/current_trigger
+echo 256 > buffer/length
+echo 1 > buffer/enable
+dd if=/dev/iio:device0 of=/tmp/als_lights.bin bs=2 count=256
+echo 0 > buffer/enable
+----
+
+Send `als_lights.bin` to the host the same way as the register snapshot --
+start Step 1's listener, then from the guest:
+
+[source,sh]
+----
+nc 10.0.2.2 7777 < /tmp/als_lights.bin
+----
+
+Open it with `docs/envcombo-als-plot.hexpat`. Its
+`+[[hex::visualize("line_plot", ...)]]+`
+attribute draws light-vs-sample in ImHex's visualizer pane -- you'll see
+the simulator's sawtooth ramp.
+
+.ImHex `line_plot` of a captured ALS buffer -- the simulator's sawtooth ramp
+image::images/imhex-plot-snapshot.png[ImHex line_plot visualizer of the captured ALS samples,900]
+
 == Run the test harness
 
 The harness is self-contained: module-loading reloads both modules for a
