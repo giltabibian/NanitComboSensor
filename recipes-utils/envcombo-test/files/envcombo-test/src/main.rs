@@ -6,9 +6,10 @@
 //! simulator's raw register file exposed in debugfs, so every assertion
 //! can actually fail if the driver misbehaves.
 //!
-//! Test order matters: configuration tests restore the driver defaults
-//! they started from, and the power-mode assertions assume events and
-//! buffer are disabled in between.
+//! Each test is self-isolating: test_module_loading reloads both modules
+//! for a deterministic starting point, and every device test calls
+//! reset_baseline() first, so the suite does not depend on a fresh boot, on
+//! earlier manual interaction, or on the order the tests run in.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -62,6 +63,50 @@ macro_rules! check {
     };
 }
 
+/// Tiny seeded PRNG (splitmix64) so the test order can be shuffled
+/// reproducibly without pulling in an external crate (the Yocto build is
+/// offline).
+struct Rng(u64);
+
+impl Rng {
+    fn new(seed: u64) -> Self {
+        Rng(seed)
+    }
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+    /// Index in 0..n (n must be > 0).
+    fn below(&mut self, n: usize) -> usize {
+        (self.next_u64() % n as u64) as usize
+    }
+}
+
+/// Seed for the test-order shuffle: `--seed=N`, else `ENVCOMBO_TEST_SEED=N`,
+/// else derived from the clock. Always printed so any failing ordering can
+/// be replayed.
+fn parse_seed() -> u64 {
+    for arg in std::env::args().skip(1) {
+        if let Some(v) = arg.strip_prefix("--seed=") {
+            if let Ok(n) = v.parse() {
+                return n;
+            }
+        }
+    }
+    if let Ok(v) = std::env::var("ENVCOMBO_TEST_SEED") {
+        if let Ok(n) = v.parse() {
+            return n;
+        }
+    }
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E37_79B9_7F4A_7C15)
+}
+
 fn main() {
     let tests: &[(&str, fn(&mut Ctx) -> TestResult)] = &[
         ("module-loading", test_module_loading),
@@ -75,24 +120,49 @@ fn main() {
         ("kernel-log-health", test_kernel_log),
     ];
 
+    // module-loading (first) discovers the device and forces a clean slate;
+    // module-unloading and kernel-log-health (last two) must run after every
+    // device test. Only the device tests in between are order-independent, so
+    // those are the ones we shuffle -- a reproducible way to prove the
+    // per-test isolation holds regardless of order. Replay a specific order
+    // with --seed=N or ENVCOMBO_TEST_SEED=N.
+    let seed = parse_seed();
+    let mut order: Vec<usize> = (0..tests.len()).collect();
+    let (mid_start, mid_end) = (1, tests.len() - 2);
+    let mut rng = Rng::new(seed);
+    for i in (mid_start + 1..mid_end).rev() {
+        let j = mid_start + rng.below(i - mid_start + 1);
+        order.swap(i, j);
+    }
+
     let mut ctx = Ctx::default();
     let mut failures = 0;
 
-    println!("envcombo driver test harness ({} tests)", tests.len());
-    for (i, (name, test)) in tests.iter().enumerate() {
+    println!(
+        "envcombo driver test harness ({} tests, seed {})",
+        tests.len(),
+        seed
+    );
+    for (pos, &idx) in order.iter().enumerate() {
+        let (name, test) = tests[idx];
         match test(&mut ctx) {
-            Ok(()) => println!("[{}/{}] {:<28} PASS", i + 1, tests.len(), name),
+            Ok(()) => println!("[{}/{}] {:<28} PASS", pos + 1, tests.len(), name),
             Err(e) => {
                 failures += 1;
-                println!("[{}/{}] {:<28} FAIL: {}", i + 1, tests.len(), name, e);
+                println!("[{}/{}] {:<28} FAIL: {}", pos + 1, tests.len(), name, e);
             }
         }
     }
 
     if failures == 0 {
-        println!("RESULT: all {} tests passed", tests.len());
+        println!("RESULT: all {} tests passed (seed {})", tests.len(), seed);
     } else {
-        println!("RESULT: {} of {} tests FAILED", failures, tests.len());
+        println!(
+            "RESULT: {} of {} tests FAILED (seed {})",
+            failures,
+            tests.len(),
+            seed
+        );
     }
     std::process::exit(if failures == 0 { 0 } else { 1 });
 }
@@ -288,17 +358,63 @@ fn wait_device(present: bool, timeout: Duration) -> Result<Option<(PathBuf, Path
     }
 }
 
+/// Force both modules to reload so the suite starts from a deterministic
+/// state regardless of prior boot or manual activity. Reloading the driver
+/// resets its CFG to the probe defaults; reloading the simulator clears its
+/// internal latches (the ALS threshold edge-state in particular, which no
+/// sysfs write can reach).
+fn reload_modules() -> TestResult {
+    // Best-effort: detach the trigger and stop the buffer first so no
+    // consumer reference keeps the driver module busy across rmmod.
+    if let Ok((dev, _)) = find_iio_device() {
+        let _ = sysfs_write(&dev.join("buffer/enable"), "0");
+        let _ = sysfs_write(&dev.join("trigger/current_trigger"), "\n");
+    }
+    if module_loaded(DRV_MODULE) {
+        run("rmmod", &[DRV_MODULE])?;
+        wait_device(false, Duration::from_secs(5))?;
+    }
+    if module_loaded(SIM_MODULE) {
+        run("rmmod", &[SIM_MODULE])?;
+    }
+    run("modprobe", &[SIM_MODULE])?;
+    run("modprobe", &[DRV_MODULE])?;
+    Ok(())
+}
+
+/// Bring the device to a known baseline so each test is independent of the
+/// order tests run in and of any state earlier tests (or manual poking) left
+/// behind: consumers off, default gain/time, full-range (effectively
+/// disabled) thresholds. sysfs only -- the simulator's edge latch is handled
+/// by reload_modules() at startup and by test_events itself.
+fn reset_baseline(ctx: &Ctx) -> TestResult {
+    // Drop any active consumers first so the device returns to SLEEP and
+    // scan-element writes are permitted again.
+    let _ = sysfs_write(&attr(ctx, "buffer/enable"), "0");
+    let _ = sysfs_write(&attr(ctx, "events/in_illuminance_thresh_either_en"), "0");
+    let _ = sysfs_write(&attr(ctx, "scan_elements/in_illuminance_en"), "0");
+    let _ = sysfs_write(&attr(ctx, "scan_elements/in_timestamp_en"), "0");
+
+    // Probe defaults: gain x1, integration time 200 ms.
+    sysfs_write(&attr(ctx, "in_illuminance_hardwaregain"), "1")?;
+    sysfs_write(&attr(ctx, "in_illuminance_integration_time"), "0.2")?;
+
+    // Open the threshold window fully. Raise the high bound before lowering
+    // the low bound so the window stays well-formed at every step.
+    sysfs_write(&attr(ctx, "events/in_illuminance_thresh_rising_value"), "65535")?;
+    sysfs_write(&attr(ctx, "events/in_illuminance_thresh_falling_value"), "0")?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 fn test_module_loading(ctx: &mut Ctx) -> TestResult {
-    // The image autoloads both modules; load them here as a fallback so the
-    // harness also works after a manual unload.
+    // Start from a guaranteed-clean slate so the suite does not depend on a
+    // fresh boot or on whatever state earlier manual interaction left behind.
+    reload_modules()?;
     for module in [SIM_MODULE, DRV_MODULE] {
-        if !module_loaded(module) {
-            run("modprobe", &[module])?;
-        }
         check!(module_loaded(module), "module {} did not load", module);
     }
 
@@ -321,6 +437,7 @@ fn test_module_loading(ctx: &mut Ctx) -> TestResult {
 }
 
 fn test_direct_read(ctx: &mut Ctx) -> TestResult {
+    reset_baseline(ctx)?;
     let raw_attr = attr(ctx, "in_illuminance_raw");
 
     // Each sysfs read runs a one-shot conversion; the device must be back
@@ -351,6 +468,7 @@ fn test_direct_read(ctx: &mut Ctx) -> TestResult {
 }
 
 fn test_gain_and_time(ctx: &mut Ctx) -> TestResult {
+    reset_baseline(ctx)?;
     let gain_attr = attr(ctx, "in_illuminance_hardwaregain");
     let time_attr = attr(ctx, "in_illuminance_integration_time");
 
@@ -409,13 +527,13 @@ fn test_gain_and_time(ctx: &mut Ctx) -> TestResult {
         "integration_time changed by rejected write"
     );
 
-    // Restore driver defaults for the following tests.
-    sysfs_write(&gain_attr, "1")?;
-    sysfs_write(&time_attr, "0.2")?;
+    // No explicit restore needed: reset_baseline() re-establishes the
+    // defaults at the start of every test.
     Ok(())
 }
 
 fn test_threshold_attrs(ctx: &mut Ctx) -> TestResult {
+    reset_baseline(ctx)?;
     let rising = attr(ctx, "events/in_illuminance_thresh_rising_value");
     let falling = attr(ctx, "events/in_illuminance_thresh_falling_value");
 
@@ -546,59 +664,86 @@ fn expect_event(fd: &OwnedFd, timeout: Duration, what: &str) -> Result<i64, Stri
 }
 
 fn test_events(ctx: &mut Ctx) -> TestResult {
+    reset_baseline(ctx)?;
+
     let enable = attr(ctx, "events/in_illuminance_thresh_either_en");
     let rising = attr(ctx, "events/in_illuminance_thresh_rising_value");
     let falling = attr(ctx, "events/in_illuminance_thresh_falling_value");
+    let raw = attr(ctx, "in_illuminance_raw");
     let fd = open_event_fd(&ctx.chardev)?;
 
-    // Tight window [0, 5]: the ramping light level exceeds 5 within ~1.5 s
-    // at default gain/time, guaranteeing an upward crossing.
-    sysfs_write(&falling, "0")?;
-    sysfs_write(&rising, "5")?;
+    // Run the body with guaranteed teardown: a mid-test failure must not
+    // leave events enabled (that would pin the device in CONTINUOUS and
+    // cascade into the buffer/power-fsm tests).
+    let result = (|| -> TestResult {
+        // The device only signals on the in-window -> out-of-window
+        // transition, so each crossing below is created deterministically:
+        // first park the level inside a window (clearing any latched
+        // edge-state from earlier use), then move a threshold past it.
+        sysfs_write(&enable, "1")?;
+        check!(read_u32(&enable)? == 1, "enable readback != 1");
+        expect_power_mode(PWR_CONTINUOUS, "with events enabled")?;
 
-    sysfs_write(&enable, "1")?;
-    check!(read_u32(&enable)? == 1, "enable readback != 1");
-    expect_power_mode(PWR_CONTINUOUS, "with events enabled")?;
+        // Full-range window: a few conversions observe the level in-window,
+        // so the simulator's edge latch is cleared regardless of how the
+        // device was last used. Then avoid arming right as the 0..250
+        // sawtooth wraps (which would briefly undo the crossing) by sampling
+        // a non-peak level; the wait is bounded so a stalled simulator fails
+        // via the expect_event timeout below rather than hanging here.
+        sleep(3 * CONV_PERIOD);
+        while read_event(&fd, Duration::ZERO)?.is_some() {} // drain
+        let deadline = Instant::now() + Duration::from_secs(12);
+        let mut level = read_u32(&raw)?;
+        while level > 200 && Instant::now() < deadline {
+            sleep(CONV_PERIOD);
+            level = read_u32(&raw)?;
+        }
 
-    let first_ts = expect_event(&fd, Duration::from_secs(10), "above-window crossing")?;
+        // Upward crossing: drop the high threshold just below the sampled
+        // level so the next conversion is already out-of-window above.
+        sysfs_write(&rising, &format!("{}", level.saturating_sub(2)))?;
+        let first_ts = expect_event(&fd, Duration::from_secs(10), "above-window crossing")?;
 
-    // Re-arm in the other direction. Widen the window first and let a
-    // conversion observe it (the device only signals on the out-of-window
-    // transition, so it must see the level back in range before it can
-    // trigger again), then raise the low threshold above the current level.
-    sysfs_write(&rising, "65535")?;
-    sleep(3 * CONV_PERIOD);
-    while read_event(&fd, Duration::ZERO)?.is_some() {} // drain
-    let level = read_u32(&attr(ctx, "in_illuminance_raw"))?;
-    sysfs_write(&falling, &format!("{}", level + 100))?;
+        // Re-arm downward: widen again, let a conversion see the level back
+        // in range to clear the latch, then raise the low threshold above it.
+        sysfs_write(&rising, "65535")?;
+        sleep(3 * CONV_PERIOD);
+        while read_event(&fd, Duration::ZERO)?.is_some() {}
+        let level = read_u32(&raw)?;
+        sysfs_write(&falling, &format!("{}", level + 100))?;
+        let second_ts = expect_event(&fd, Duration::from_secs(10), "below-window crossing")?;
+        check!(
+            second_ts > first_ts,
+            "event timestamps not increasing: {} then {}",
+            first_ts,
+            second_ts
+        );
 
-    let second_ts = expect_event(&fd, Duration::from_secs(10), "below-window crossing")?;
-    check!(
-        second_ts > first_ts,
-        "event timestamps not increasing: {} then {}",
-        first_ts,
-        second_ts
-    );
+        // Back in range: no further events may arrive.
+        sysfs_write(&falling, "0")?;
+        sysfs_write(&rising, "65535")?;
+        sleep(3 * CONV_PERIOD);
+        while read_event(&fd, Duration::ZERO)?.is_some() {}
+        check!(
+            read_event(&fd, 5 * CONV_PERIOD)?.is_none(),
+            "spurious event while level inside the threshold window"
+        );
 
-    // Back in range: no further events may arrive.
-    sysfs_write(&falling, "0")?;
-    sleep(3 * CONV_PERIOD);
-    while read_event(&fd, Duration::ZERO)?.is_some() {}
-    check!(
-        read_event(&fd, 5 * CONV_PERIOD)?.is_none(),
-        "spurious event while level inside the threshold window"
-    );
+        expect_power_mode(PWR_CONTINUOUS, "events still enabled before teardown")?;
+        Ok(())
+    })();
 
-    sysfs_write(&enable, "0")?;
+    // Always disable events, then report the inner result.
+    let teardown = sysfs_write(&enable, "0");
+    result?;
+    teardown?;
     check!(read_u32(&enable)? == 0, "enable readback != 0");
     expect_power_mode(PWR_SLEEP, "after disabling events")?;
-
-    // Restore full-range thresholds.
-    sysfs_write(&rising, "65535")?;
     Ok(())
 }
 
 fn test_buffer(ctx: &mut Ctx) -> TestResult {
+    reset_baseline(ctx)?;
     let scan_en = attr(ctx, "scan_elements/in_illuminance_en");
     let ts_en = attr(ctx, "scan_elements/in_timestamp_en");
     let buf_en = attr(ctx, "buffer/enable");
@@ -743,11 +888,12 @@ fn expect_buffer_alive(ctx: &Ctx, timeout: Duration) -> TestResult {
 /// exercises the cases where one of two active users goes away and the
 /// device must stay in CONTINUOUS for the remaining one.
 fn test_power_fsm(ctx: &mut Ctx) -> TestResult {
+    reset_baseline(ctx)?;
     let ev_en = attr(ctx, "events/in_illuminance_thresh_either_en");
     let raw = attr(ctx, "in_illuminance_raw");
 
-    // Thresholds were left spanning the full range, so enabling the event
-    // here produces no crossings; only the power state is of interest.
+    // reset_baseline left thresholds spanning the full range, so enabling
+    // the event here produces no crossings; only the power state matters.
     expect_power_mode(PWR_SLEEP, "at start")?;
 
     sysfs_write(&ev_en, "1")?;
