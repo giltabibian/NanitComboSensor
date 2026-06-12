@@ -118,6 +118,7 @@ static int envcombo_write_reg16(struct i2c_client *client, u8 reg, u16 val)
 
 struct envcombo_data {
 	struct i2c_client *client;
+	/* serializes config writes, power-mode changes and one-shot reads */
 	struct mutex lock;
 	struct completion als_done;
 	struct iio_trigger *trig;
@@ -210,12 +211,12 @@ static int envcombo_read_als_raw(struct envcombo_data *data, int *val)
 		reinit_completion(&data->als_done);
 
 		ret = envcombo_write_reg(data->client, ENVCOMBO_REG_PWR_MODE,
-					  ENVCOMBO_PWR_ONE_SHOT);
+					 ENVCOMBO_PWR_ONE_SHOT);
 		if (ret < 0)
 			goto out_unlock;
 
 		if (!wait_for_completion_timeout(&data->als_done,
-				msecs_to_jiffies(ENVCOMBO_RAW_READ_TIMEOUT_MS))) {
+						 msecs_to_jiffies(ENVCOMBO_RAW_READ_TIMEOUT_MS))) {
 			ret = -ETIMEDOUT;
 			goto out_unlock;
 		}
@@ -234,7 +235,7 @@ out_unlock:
 }
 
 static int envcombo_read_raw(struct iio_dev *indio_dev,
-			      struct iio_chan_spec const *chan,
+			     struct iio_chan_spec const *chan,
 			      int *val, int *val2, long mask)
 {
 	struct envcombo_data *data = iio_priv(indio_dev);
@@ -267,7 +268,7 @@ static int envcombo_read_raw(struct iio_dev *indio_dev,
 }
 
 static int envcombo_read_avail(struct iio_dev *indio_dev,
-				struct iio_chan_spec const *chan,
+			       struct iio_chan_spec const *chan,
 				const int **vals, int *type, int *length,
 				long mask)
 {
@@ -298,7 +299,7 @@ static int envcombo_read_avail(struct iio_dev *indio_dev,
 }
 
 static int envcombo_write_raw_get_fmt(struct iio_dev *indio_dev,
-				       struct iio_chan_spec const *chan,
+				      struct iio_chan_spec const *chan,
 				       long mask)
 {
 	switch (mask) {
@@ -310,7 +311,7 @@ static int envcombo_write_raw_get_fmt(struct iio_dev *indio_dev,
 }
 
 static int envcombo_write_raw(struct iio_dev *indio_dev,
-			       struct iio_chan_spec const *chan,
+			      struct iio_chan_spec const *chan,
 			       int val, int val2, long mask)
 {
 	struct envcombo_data *data = iio_priv(indio_dev);
@@ -330,7 +331,7 @@ static int envcombo_write_raw(struct iio_dev *indio_dev,
 
 		mutex_lock(&data->lock);
 		ret = envcombo_update_bits(data->client, ENVCOMBO_REG_CFG,
-					    ENVCOMBO_CFG_ALS_GAIN_MASK,
+					   ENVCOMBO_CFG_ALS_GAIN_MASK,
 					    FIELD_PREP(ENVCOMBO_CFG_ALS_GAIN_MASK, idx));
 		if (!ret)
 			data->als_gain_idx = idx;
@@ -355,7 +356,7 @@ static int envcombo_write_raw(struct iio_dev *indio_dev,
 
 		mutex_lock(&data->lock);
 		ret = envcombo_update_bits(data->client, ENVCOMBO_REG_CFG,
-					    ENVCOMBO_CFG_ALS_TIME_MASK,
+					   ENVCOMBO_CFG_ALS_TIME_MASK,
 					    FIELD_PREP(ENVCOMBO_CFG_ALS_TIME_MASK, idx));
 		if (!ret)
 			data->als_time_idx = idx;
@@ -368,7 +369,7 @@ static int envcombo_write_raw(struct iio_dev *indio_dev,
 }
 
 static int envcombo_read_event_value(struct iio_dev *indio_dev,
-				      const struct iio_chan_spec *chan,
+				     const struct iio_chan_spec *chan,
 				      enum iio_event_type type,
 				      enum iio_event_direction dir,
 				      enum iio_event_info info,
@@ -391,7 +392,7 @@ static int envcombo_read_event_value(struct iio_dev *indio_dev,
 }
 
 static int envcombo_write_event_value(struct iio_dev *indio_dev,
-				       const struct iio_chan_spec *chan,
+				      const struct iio_chan_spec *chan,
 				       enum iio_event_type type,
 				       enum iio_event_direction dir,
 				       enum iio_event_info info,
@@ -412,7 +413,7 @@ static int envcombo_write_event_value(struct iio_dev *indio_dev,
 			break;
 		}
 		ret = envcombo_write_reg16(data->client, ENVCOMBO_REG_ALS_TH_HIGH,
-					    val);
+					   val);
 		if (!ret)
 			WRITE_ONCE(data->thresh_high, val);
 		break;
@@ -423,7 +424,7 @@ static int envcombo_write_event_value(struct iio_dev *indio_dev,
 			break;
 		}
 		ret = envcombo_write_reg16(data->client, ENVCOMBO_REG_ALS_TH_LOW,
-					    val);
+					   val);
 		if (!ret)
 			WRITE_ONCE(data->thresh_low, val);
 		break;
@@ -437,7 +438,7 @@ static int envcombo_write_event_value(struct iio_dev *indio_dev,
 }
 
 static int envcombo_read_event_config(struct iio_dev *indio_dev,
-				       const struct iio_chan_spec *chan,
+				      const struct iio_chan_spec *chan,
 				       enum iio_event_type type,
 				       enum iio_event_direction dir)
 {
@@ -447,7 +448,7 @@ static int envcombo_read_event_config(struct iio_dev *indio_dev,
 }
 
 static int envcombo_write_event_config(struct iio_dev *indio_dev,
-					const struct iio_chan_spec *chan,
+				       const struct iio_chan_spec *chan,
 					enum iio_event_type type,
 					enum iio_event_direction dir,
 					int state)
@@ -500,7 +501,7 @@ static irqreturn_t envcombo_trigger_handler(int irq, void *p)
 	int ret;
 
 	ret = envcombo_read_reg16(data->client, ENVCOMBO_REG_ALS_MSB,
-				   &data->scan.light);
+				  &data->scan.light);
 	/*
 	 * Our own trigger fires via iio_trigger_poll_nested(), which skips
 	 * the iio_pollfunc_store_time top half, so pf->timestamp is only
@@ -508,7 +509,7 @@ static irqreturn_t envcombo_trigger_handler(int irq, void *p)
 	 */
 	if (!ret)
 		iio_push_to_buffers_with_timestamp(indio_dev, &data->scan,
-						    pf->timestamp ?:
+						   pf->timestamp ?:
 						    iio_get_time_ns(indio_dev));
 
 	iio_trigger_notify_done(indio_dev->trig);
@@ -525,7 +526,7 @@ static irqreturn_t envcombo_irq_thread(int irq, void *private)
 	status = envcombo_read_reg(data->client, ENVCOMBO_REG_STATUS);
 	if (status < 0) {
 		dev_warn_ratelimited(&data->client->dev,
-				      "failed to read STATUS: %d\n", status);
+				     "failed to read STATUS: %d\n", status);
 		return IRQ_HANDLED;
 	}
 
@@ -571,7 +572,7 @@ static int envcombo_probe(struct i2c_client *client)
 		return -EINVAL;
 
 	if (!i2c_check_functionality(client->adapter,
-				      I2C_FUNC_SMBUS_BYTE_DATA |
+				     I2C_FUNC_SMBUS_BYTE_DATA |
 				      I2C_FUNC_SMBUS_WORD_DATA))
 		return -EOPNOTSUPP;
 
@@ -617,7 +618,7 @@ static int envcombo_probe(struct i2c_client *client)
 	data->als_time_idx = ENVCOMBO_DEFAULT_TIME_IDX;
 
 	ret = envcombo_write_reg(client, ENVCOMBO_REG_CFG,
-				  ENVCOMBO_CFG_ALS_EN |
+				 ENVCOMBO_CFG_ALS_EN |
 				  FIELD_PREP(ENVCOMBO_CFG_ALS_GAIN_MASK, data->als_gain_idx) |
 				  FIELD_PREP(ENVCOMBO_CFG_ALS_TIME_MASK, data->als_time_idx));
 	if (ret)
@@ -630,7 +631,7 @@ static int envcombo_probe(struct i2c_client *client)
 	 * falling-edge below.
 	 */
 	ret = envcombo_write_reg(client, ENVCOMBO_REG_INT_CFG,
-				  ENVCOMBO_INT_CFG_EN | ENVCOMBO_INT_CFG_LATCH);
+				 ENVCOMBO_INT_CFG_EN | ENVCOMBO_INT_CFG_LATCH);
 	if (ret)
 		return ret;
 
@@ -647,19 +648,19 @@ static int envcombo_probe(struct i2c_client *client)
 
 	/* Stay low-power until a raw read, buffer, or event is requested. */
 	ret = envcombo_update_bits(client, ENVCOMBO_REG_PWR_MODE,
-				    ENVCOMBO_PWR_MODE_MASK, ENVCOMBO_PWR_SLEEP);
+				   ENVCOMBO_PWR_MODE_MASK, ENVCOMBO_PWR_SLEEP);
 	if (ret)
 		return ret;
 
 	ret = devm_request_threaded_irq(dev, client->irq, NULL,
-					 envcombo_irq_thread,
+					envcombo_irq_thread,
 					 IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
 					 "envcombo", indio_dev);
 	if (ret)
 		return ret;
 
 	data->trig = devm_iio_trigger_alloc(dev, "%s-dev%d", indio_dev->name,
-					     iio_device_id(indio_dev));
+					    iio_device_id(indio_dev));
 	if (!data->trig)
 		return -ENOMEM;
 
@@ -677,7 +678,7 @@ static int envcombo_probe(struct i2c_client *client)
 	indio_dev->trig = iio_trigger_get(data->trig);
 
 	ret = devm_iio_triggered_buffer_setup(dev, indio_dev,
-					       iio_pollfunc_store_time,
+					      iio_pollfunc_store_time,
 					       envcombo_trigger_handler, NULL);
 	if (ret)
 		return ret;
