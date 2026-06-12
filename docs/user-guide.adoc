@@ -370,6 +370,9 @@ nc 10.0.2.2 7777 < /tmp/als_records.bin
 
 Open `als_records.bin` in ImHex with `docs/imhex/envcombo-als-records.hexpat`.
 
+.ImHex decoding the 16-byte ALS records -- `light`, padding, and the `s64` nanosecond timestamp per sample
+image::images/imhex-records-snapshot.png[ImHex Pattern Data view of the decoded ALS records,900]
+
 == Run the test harness
 
 The harness is self-contained: module-loading reloads both modules for a
