@@ -10,7 +10,7 @@ Host-side commands assume a Yocto 5.0 (scarthgap) checkout of poky; target-side 
 == Prerequisites
 
 * poky, scarthgap branch (`git clone -b scarthgap git://git.yoctoproject.org/poky`)
-* checked out to origin/yocto-5.0.18 tag
+* checked out to the `yocto-5.0.18` tag
 * The usual Yocto host packages for your distro
 * This repository checked out next to (or anywhere relative to) poky
 
