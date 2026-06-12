@@ -640,20 +640,10 @@ fn test_buffer(ctx: &mut Ctx) -> TestResult {
         let mut data = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(8);
         while data.len() < 8 * 16 && Instant::now() < deadline {
-            let mut pfd = libc::pollfd {
-                fd: file.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            let ret = unsafe { libc::poll(&mut pfd, 1, 1000) };
-            check!(ret >= 0, "poll buffer: {}", std::io::Error::last_os_error());
-            if ret == 0 {
-                continue;
-            }
             let mut chunk = [0u8; 256];
-            let n = unsafe { libc::read(file.as_raw_fd(), chunk.as_mut_ptr().cast(), chunk.len()) };
-            check!(n >= 0, "read buffer: {}", std::io::Error::last_os_error());
-            data.extend_from_slice(&chunk[..n as usize]);
+            if let Some(n) = poll_read_nonblock(file.as_raw_fd(), &mut chunk, 1000)? {
+                data.extend_from_slice(&chunk[..n]);
+            }
         }
         check!(
             data.len() >= 8 * 16,
@@ -730,29 +720,19 @@ fn expect_buffer_alive(ctx: &Ctx, timeout: Duration) -> TestResult {
     // Drain any backlog so only samples produced from now on count.
     loop {
         let mut chunk = [0u8; 64];
-        let n = unsafe { libc::read(file.as_raw_fd(), chunk.as_mut_ptr().cast(), chunk.len()) };
-        if n <= 0 {
-            break;
+        match poll_read_nonblock(file.as_raw_fd(), &mut chunk, 0)? {
+            Some(n) if n > 0 => continue,
+            _ => break,
         }
     }
 
     let deadline = Instant::now() + timeout;
     let mut got = 0usize;
     while got < 16 && Instant::now() < deadline {
-        let mut pfd = libc::pollfd {
-            fd: file.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        let ret = unsafe { libc::poll(&mut pfd, 1, 500) };
-        check!(ret >= 0, "poll buffer: {}", std::io::Error::last_os_error());
-        if ret == 0 {
-            continue;
-        }
         let mut chunk = [0u8; 64];
-        let n = unsafe { libc::read(file.as_raw_fd(), chunk.as_mut_ptr().cast(), chunk.len()) };
-        check!(n >= 0, "read buffer: {}", std::io::Error::last_os_error());
-        got += n as usize;
+        if let Some(n) = poll_read_nonblock(file.as_raw_fd(), &mut chunk, 500)? {
+            got += n;
+        }
     }
     check!(got >= 16, "no buffered sample within {:?}", timeout);
     Ok(())
