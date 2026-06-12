@@ -23,15 +23,14 @@ HW -> HW : convert, latch ALS_OUT,\nALS_RDY = 1
 HW -> IRQ : INT pulse
 activate IRQ
 IRQ -> HW : read STATUS (clears + re-arms)
-IRQ -> IIO : ALS_RDY && buffer_en ->\niio_trigger_poll(trig)
-deactivate IRQ
-IIO -> IIO : pollfunc top half:\ntimestamp = iio_get_time_ns()
-IIO -> DRV : envcombo_trigger_handler (bottom half)
+IRQ -> IIO : ALS_RDY && buffer_en ->\niio_trigger_poll_nested(trig)
+IIO -> DRV : envcombo_trigger_handler\n(runs in the IRQ thread; the\nstore-time top half is skipped)
 activate DRV
-DRV -> HW : read ALS_OUT MSB+LSB
-DRV -> IIO : iio_push_to_buffers_with_timestamp\n(scan, pf->timestamp)
+DRV -> HW : read ALS_OUT\n(one 16-bit word transaction)
+DRV -> IIO : iio_push_to_buffers_with_timestamp\n(scan, iio_get_time_ns())
 DRV -> IIO : iio_trigger_notify_done
 deactivate DRV
+deactivate IRQ
 IIO --> US : read /dev/iio:deviceN:\n[ u16 light | 6 B pad | s64 timestamp ] = 16 B
 
 == Disable ==

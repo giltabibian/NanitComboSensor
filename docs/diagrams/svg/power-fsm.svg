@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" contentScriptType="application/ecmascript" contentStyleType="text/css" height="431px" preserveAspectRatio="none" style="width:694px;height:431px;" version="1.1" viewBox="0 0 694 431" width="694px" zoomAndPan="magnify"><defs/><g><rect fill="#FDFDFD" height="50" rx="12.5" ry="12.5" style="stroke: #444444; stroke-width: 1.5;" width="111" x="278.98" y="181.5"/><line style="stroke: #444444; stroke-width: 1.5;" x1="278.98" x2="389.98" y1="207.7969" y2="207.7969"/><text fill="#000000" font-family="Helvetica" font-size="14" lengthAdjust="spacingAndGlyphs" textLength="91" x="288.98" y="199.4951">SLEEP (0x01)</text><rect fill="#FDFDFD" height="50" rx="12.5" ry="12.5" style="stroke: #444444; stroke-width: 1.5;" width="142" x="32.48" y="18.5"/><line style="stroke: #444444; stroke-width: 1.5;" x1="32.48" x2="174.48" y1="44.7969" y2="44.7969"/><text fill="#000000" font-family="Helvetica" font-size="14" lengthAdjust="spacingAndGlyphs" textLength="122" x="42.48" y="36.4951">ONE-SHOT (0x02)</text><rect fill="#FDFDFD" height="50" rx="12.5" ry="12.5" style="stroke: #444444; stroke-width: 1.5;" width="161" x="253.98" y="352"/><line style="stroke: #444444; stroke-width: 1.5;" x1="253.98" x2="414.98" y1="378.2969" y2="378.2969"/><text fill="#000000" font-family="Helvetica" font-size="14" lengthAdjust="spacingAndGlyphs" textLength="141" x="263.98" y="369.9951">CONTINUOUS (0x03)</text><ellipse cx="580.48" cy="43.5" fill="#000000" rx="10" ry="10" style="stroke: none; stroke-width: 1.0;"/><path d="M209.98,8 L209.98,39.5 L174.73,43.5 L209.98,47.5 L209.98,78.5313 A0,0 0 0 0 209.98,78.5313 L452.98,78.5313 A0,0 0 0 0 452.98,78.5313 L452.98,18 L442.98,8 L209.98,8 A0,0 0 0 0 209.98,8 " fill="#FBFB77" style="stroke: #A80036; stroke-width: 1.0;"/><path d="M442.98,8 L442.98,18 L452.98,18 L442.98,8 " fill="#FBFB77" style="stroke: #A80036; stroke-width: 1.0;"/><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="186" x="215.98" y="25.0669">Transient state, used only for</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="222" x="215.98" y="40.1997">on-demand raw reads. Driver waits</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="207" x="215.98" y="55.3325">on a completion signalled by the</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="187" x="215.98" y="70.4653">IRQ thread (500 ms timeout).</text><path d="M449.98,334 L449.98,373 L415.13,377 L449.98,381 L449.98,419.6641 A0,0 0 0 0 449.98,419.6641 L682.98,419.6641 A0,0 0 0 0 682.98,419.6641 L682.98,344 L672.98,334 L449.98,334 A0,0 0 0 0 449.98,334 " fill="#FBFB77" style="stroke: #A80036; stroke-width: 1.0;"/><path d="M672.98,334 L672.98,344 L682.98,344 L672.98,334 " fill="#FBFB77" style="stroke: #A80036; stroke-width: 1.0;"/><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="212" x="455.98" y="351.0669">Conversion every cycle (200 ms).</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="208" x="455.98" y="366.1997">ALS_RDY each cycle, ALS_INT on</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="197" x="455.98" y="381.3325">threshold crossings. Raw reads</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="211" x="455.98" y="396.4653">skip ONE-SHOT and just read the</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="114" x="455.98" y="411.5981">latched ALS_OUT.</text><path d="M49.48,171 L49.48,241.5313 A0,0 0 0 0 49.48,241.5313 L243.48,241.5313 A0,0 0 0 0 243.48,241.5313 L243.48,210.5 L278.85,206.5 L243.48,202.5 L243.48,181 L233.48,171 L49.48,171 A0,0 0 0 0 49.48,171 " fill="#FBFB77" style="stroke: #A80036; stroke-width: 1.0;"/><path d="M233.48,171 L233.48,181 L243.48,181 L233.48,171 " fill="#FBFB77" style="stroke: #A80036; stroke-width: 1.0;"/><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="133" x="55.48" y="188.0669">Registers accessible,</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="173" x="55.48" y="203.1997">no measurements, latched</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="148" x="55.48" y="218.3325">ALS_OUT still readable.</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="162" x="55.48" y="233.4653">OFF (0x00) is never used.</text><!--MD5=[e23f77aba4955702aa2491649357cd66]
+link *start to SLEEP--><path d="M578.42,53.39 C573.59,72.3 559.72,116.79 531.48,141 C493.14,173.86 437.66,190.08 395.33,198.02 " fill="none" id="*start-&gt;SLEEP" style="stroke: #A80036; stroke-width: 1.0;"/><polygon fill="#A80036" points="390.24,198.95,399.8133,201.2633,395.1582,198.0493,398.3722,193.3941,390.24,198.95" style="stroke: #A80036; stroke-width: 1.0;"/><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="104" x="555.48" y="122.0669">power-on reset /</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="81" x="566.98" y="137.1997">end of probe</text><!--MD5=[10127f8c439aa73599cbd5c6bb5212ed]
+link SLEEP to ONESHOT--><path d="M330.84,181.48 C326.29,159.6 316.39,127.9 295.48,109 C260.11,77.02 237.63,94.3 192.48,79 C184.68,76.36 176.55,73.44 168.52,70.46 " fill="none" id="SLEEP-&gt;ONESHOT" style="stroke: #A80036; stroke-width: 1.0;"/><polygon fill="#A80036" points="163.54,68.59,170.5555,75.5025,168.2199,70.3503,173.372,68.0147,163.54,68.59" style="stroke: #A80036; stroke-width: 1.0;"/><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="204" x="318.48" y="122.0669">sysfs read of in_illuminance_raw</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="199" x="320.98" y="137.1997">while idle (no buffer, no events)</text><!--MD5=[c52d87e4d9f0df6bb0d0d3bebc75c494]
+link ONESHOT to SLEEP--><path d="M55.95,68.57 C23.91,87.91 -8.78,115.88 13.48,141 C50.14,182.39 207.31,155.8 260.48,171 C268.26,173.23 276.26,176.18 283.99,179.42 " fill="none" id="ONESHOT-&gt;SLEEP" style="stroke: #A80036; stroke-width: 1.0;"/><polygon fill="#A80036" points="288.76,181.47,282.0905,174.2231,284.1717,179.4832,278.9116,181.5643,288.76,181.47" style="stroke: #A80036; stroke-width: 1.0;"/><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="221" x="39.98" y="122.0669">conversion done (HW auto-return):</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="272" x="14.48" y="137.1997">ALS_OUT latched, ALS_RDY set, INT pulses</text><!--MD5=[b5e4623a0e9125d19da266269d18f4fa]
+link SLEEP to CONT--><path d="M287.66,231.61 C264.34,244.7 239.77,260.5 233.48,272 C216.88,302.29 247.11,330 278.73,349.18 " fill="none" id="SLEEP-&gt;CONT" style="stroke: #A80036; stroke-width: 1.0;"/><polygon fill="#A80036" points="283.39,351.95,277.699,343.9118,279.0925,349.3943,273.61,350.7878,283.39,351.95" style="stroke: #A80036; stroke-width: 1.0;"/><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="114" x="254.98" y="285.0669">buffer enabled OR</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="155" x="234.48" y="300.1997">threshold event enabled</text><!--MD5=[d5d66657b0ba173dd5a49103d27af736]
+link CONT to SLEEP--><path d="M361.97,351.85 C374.46,339.04 387.88,322.21 394.48,304 C399.32,290.63 399.68,285.24 394.48,272 C389.04,258.18 379.1,245.57 368.85,235.23 " fill="none" id="CONT-&gt;SLEEP" style="stroke: #A80036; stroke-width: 1.0;"/><polygon fill="#A80036" points="365.07,231.53,368.6982,240.6862,368.6411,235.0296,374.2976,234.9725,365.07,231.53" style="stroke: #A80036; stroke-width: 1.0;"/><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="148" x="398.48" y="285.0669">last consumer disabled</text><text fill="#000000" font-family="Helvetica" font-size="13" lengthAdjust="spacingAndGlyphs" textLength="148" x="398.48" y="300.1997">(!buffer_en &amp;&amp; !ev_en)</text><!--MD5=[58a36bdb3c3f22dd557edea202a15c97]
+@startuml power-fsm
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam state {
+  BackgroundColor #FDFDFD
+  BorderColor #444444
+}
+
+state "SLEEP (0x01)" as SLEEP
+state "ONE-SHOT (0x02)" as ONESHOT
+state "CONTINUOUS (0x03)" as CONT
+
+[*] - -> SLEEP : power-on reset /\nend of probe
+
+SLEEP - -> ONESHOT : sysfs read of in_illuminance_raw\nwhile idle (no buffer, no events)
+ONESHOT - -> SLEEP : conversion done (HW auto-return):\nALS_OUT latched, ALS_RDY set, INT pulses
+
+SLEEP - -> CONT : buffer enabled OR\nthreshold event enabled
+CONT - -> SLEEP : last consumer disabled\n(!buffer_en && !ev_en)
+
+note right of ONESHOT
+  Transient state, used only for
+  on-demand raw reads. Driver waits
+  on a completion signalled by the
+  IRQ thread (500 ms timeout).
+end note
+
+note right of CONT
+  Conversion every cycle (200 ms).
+  ALS_RDY each cycle, ALS_INT on
+  threshold crossings. Raw reads
+  skip ONE-SHOT and just read the
+  latched ALS_OUT.
+end note
+
+note left of SLEEP
+  Registers accessible,
+  no measurements, latched
+  ALS_OUT still readable.
+  OFF (0x00) is never used.
+end note
+@enduml
+
+PlantUML version 1.2020.02(Sun Mar 01 12:22:07 IST 2020)
+(GPL source distribution)
+Java Runtime: OpenJDK Runtime Environment
+JVM: OpenJDK 64-Bit Server VM
+Java Version: 11.0.31+11-post-1ubuntu1-22.04.2-Ubuntu
+Operating System: Linux
+Default Encoding: UTF-8
+Language: en
+Country: US
+--></g></svg>

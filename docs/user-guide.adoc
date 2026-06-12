@@ -1,0 +1,265 @@
+= ENV-COMBO IIO Driver -- Installation, Build & Run
+:toc:
+:toclevels: 2
+:sectnums:
+
+link:index.html[<- Back to documentation index]
+
+Everything below is copy-pasteable. Host-side commands assume a Yocto 5.0
+(scarthgap) checkout of poky; target-side commands run as root in the
+booted image (the default login, no password).
+
+== Prerequisites
+
+* poky, scarthgap branch (`git clone -b scarthgap git://git.yoctoproject.org/poky`)
+* The usual Yocto host packages for your distro
+* This repository checked out next to (or anywhere relative to) poky
+
+== Add the layer and configure the build
+
+[source,shell]
+----
+cd poky
+source oe-init-build-env build-qemu-arm64        # creates/enters the build dir
+
+# target machine (conf/local.conf):
+echo 'MACHINE = "qemuarm64"' >> conf/local.conf
+
+# register the layer:
+bitbake-layers add-layer /path/to/NanitComboSensor
+bitbake-layers show-layers                        # meta-nanit-envcombo must be listed
+----
+
+== Build
+
+[source,shell]
+----
+bitbake envcombo-image                            # full test image (recommended)
+
+# or individual pieces:
+bitbake envcombo-driver                           # driver module only
+bitbake envcombo-sim                              # simulator module only
+bitbake envcombo-test                             # Rust test harness only
+bitbake virtual/kernel                            # kernel with the IIO fragment
+----
+
+=== Check the build artifacts
+
+[source,shell]
+----
+# deployed image + kernel:
+ls tmp/deploy/images/qemuarm64/envcombo-image-qemuarm64.rootfs.ext4 \
+   tmp/deploy/images/qemuarm64/Image
+
+# everything envcombo-related made it into the image:
+grep -E 'envcombo' tmp/deploy/images/qemuarm64/envcombo-image-qemuarm64.rootfs.manifest
+# expect: envcombo-driver, envcombo-sim, envcombo-test,
+#         kernel-module-envcombo-*, kernel-module-i2c-envcombo-sim-*
+
+# kernel config fragment was applied:
+grep -E 'CONFIG_IIO(_BUFFER|_TRIGGER|_TRIGGERED_BUFFER|_KFIFO_BUF)?=' \
+    tmp/work/qemuarm64-poky-linux/linux-yocto/*/linux-qemuarm64-standard-build/.config
+
+# compiled module objects:
+ls tmp/work/qemuarm64-poky-linux/envcombo-driver/1.0/envcombo.ko \
+   tmp/work/qemuarm64-poky-linux/envcombo-sim/1.0/i2c-envcombo-sim.ko
+----
+
+== Boot in QEMU
+
+[source,shell]
+----
+runqemu qemuarm64 envcombo-image nographic slirp
+
+# if runqemu cannot resolve the image by name, point it at the qemuboot file:
+runqemu tmp/deploy/images/qemuarm64/envcombo-image-qemuarm64.rootfs.qemuboot.conf \
+        nographic slirp
+
+# add "snapshot" to keep the rootfs pristine across runs; exit QEMU with Ctrl-A x
+----
+
+Log in as `root` (no password).
+
+== Verify the modules and the driver bind
+
+Both modules autoload at boot (`/etc/modules-load.d/`). To check:
+
+[source,shell]
+----
+lsmod | grep -E 'envcombo|i2c_envcombo_sim'
+dmesg | grep -E 'envcombo'
+# expect: "envcombo-sim: adapter #N, device at 0x39, irq M"
+
+# the bound i2c client and its driver:
+ls /sys/bus/i2c/devices/                          # e.g. 0-0039
+cat /sys/bus/i2c/devices/*-0039/name              # envcombo
+readlink /sys/bus/i2c/devices/*-0039/driver       # -> .../drivers/envcombo
+
+# the IIO device and trigger:
+grep -r . /sys/bus/iio/devices/iio:device0/name   # envcombo
+cat /sys/bus/iio/devices/trigger0/name            # envcombo-dev0
+ls /dev/iio:device0
+----
+
+Manual load/unload (e.g. after testing or to re-probe):
+
+[source,shell]
+----
+rmmod envcombo && rmmod i2c_envcombo_sim
+modprobe i2c-envcombo-sim && modprobe envcombo
+dmesg | tail
+----
+
+== Exercise the driver manually
+
+All paths below are relative to `/sys/bus/iio/devices/iio:device0`; set
+`cd /sys/bus/iio/devices/iio:device0` first.
+
+=== On-demand ALS reads (one-shot)
+
+[source,shell]
+----
+cat in_illuminance_raw        # runs a one-shot conversion (device sleeps after)
+cat in_illuminance_scale      # 1/(gain x calib_gain); raw * scale = illuminance
+----
+
+=== Gain and integration time
+
+[source,shell]
+----
+cat in_illuminance_hardwaregain_available         # 1 4 16 64
+echo 16 > in_illuminance_hardwaregain
+cat in_illuminance_hardwaregain                   # 16
+cat in_illuminance_scale                          # 0.0625 (= 1/16)
+echo 3 > in_illuminance_hardwaregain              # write error: Invalid argument
+
+cat in_illuminance_integration_time_available     # 0.050000 0.100000 0.200000 0.400000
+echo 0.4 > in_illuminance_integration_time
+cat in_illuminance_integration_time               # 0.400000
+----
+
+=== Threshold window
+
+[source,shell]
+----
+# window [50, 200]; write falling first so the window stays well-formed:
+echo 50  > events/in_illuminance_thresh_falling_value
+echo 200 > events/in_illuminance_thresh_rising_value
+cat events/in_illuminance_thresh_*_value
+
+echo 10  > events/in_illuminance_thresh_rising_value   # rejected (< falling)
+----
+
+=== Threshold events
+
+Enabling the event powers the device into CONTINUOUS; a crossing out of the
+window delivers an `IIO_EV_DIR_EITHER` event on the chardev's event fd.
+Reading the event stream needs the `IIO_GET_EVENT_FD_IOCTL` ioctl, which a
+plain shell cannot issue -- use the test harness (test 5) or
+`iio_event_monitor /dev/iio:device0` if you add `libiio` to the image. The
+enable/power side is fully checkable from the shell:
+
+[source,shell]
+----
+echo 1 > events/in_illuminance_thresh_either_en
+cat events/in_illuminance_thresh_either_en        # 1
+# device register check -- PWR_MODE (offset 0x12) == 03 (CONTINUOUS):
+hexdump -C /sys/kernel/debug/envcombo-sim/regs | head -2
+
+echo 0 > events/in_illuminance_thresh_either_en   # back to SLEEP (01)
+----
+
+=== Triggered buffer capture
+
+[source,shell]
+----
+echo 1 > scan_elements/in_illuminance_en
+echo 1 > scan_elements/in_timestamp_en
+cat trigger/current_trigger 2>/dev/null
+echo envcombo-dev0 > trigger/current_trigger
+echo 64 > buffer/length
+echo 1 > buffer/enable
+
+# one 16-byte record per 200 ms: [u16 light][6B pad][s64 timestamp]
+hexdump -e '1/2 "light=%5u " 6/1 "" 1/8 " ts=%d\n"' -n 160 /dev/iio:device0
+
+echo 0 > buffer/enable
+echo 0 > scan_elements/in_illuminance_en
+echo 0 > scan_elements/in_timestamp_en
+----
+
+=== Inspect raw device registers (simulator debugfs)
+
+[source,shell]
+----
+mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null
+hexdump -C /sys/kernel/debug/envcombo-sim/regs
+# offsets: 0x06 CFG, 0x08/0x0A TH_LOW/TH_HIGH (big-endian pairs),
+#          0x10 CAL_AGAIN, 0x11 CAL_ATIME, 0x12 PWR_MODE (01=SLEEP, 03=CONT)
+----
+
+The file is also writable at the same offsets, e.g. to simulate a factory
+integration-time override (`CAL_ATIME`, offset 0x11) before re-probing the
+driver:
+
+[source,shell]
+----
+printf '\x64' | dd of=/sys/kernel/debug/envcombo-sim/regs bs=1 seek=17 conv=notrunc
+rmmod envcombo && modprobe envcombo
+dmesg | tail -1     # "factory calibration overrides ALS integration time to 100 ms..."
+----
+
+== Run the test harness
+
+[source,shell]
+----
+envcombo-test
+echo $?             # 0 = all passed, 1 = at least one failure
+----
+
+Expected output:
+
+----
+envcombo driver test harness (9 tests)
+[1/9] module-loading               PASS
+[2/9] direct-als-read              PASS
+[3/9] gain-and-integration-time    PASS
+[4/9] threshold-attributes         PASS
+[5/9] threshold-events             PASS
+[6/9] triggered-buffer             PASS
+[7/9] power-fsm-transitions        PASS
+[8/9] module-unloading             PASS
+[9/9] kernel-log-health            PASS
+RESULT: all 9 tests passed
+----
+
+See link:test-harness.html[the test harness page] for what each test
+asserts. After a run, `dmesg | tail -20` should show only the clean
+unload/reload messages from test 8.
+
+== Troubleshooting
+
+[cols="3,5", options="header"]
+|===
+| Symptom | Check
+
+| No `iio:device0`
+| `lsmod` for both modules; `dmesg \| grep envcombo` for probe errors
+  (WHO_AM_I mismatch returns `-ENODEV`, missing IRQ returns `-EINVAL`).
+
+| `in_illuminance_raw` returns `Connection timed out`
+| The one-shot completion timed out (500 ms): the interrupt path is broken.
+  `cat /proc/interrupts \| grep envcombo` should increment on each read.
+
+| Buffer delivers nothing
+| `cat trigger/current_trigger` must be `envcombo-dev0`;
+  `scan_elements/in_illuminance_en` must be 1 before `buffer/enable`.
+
+| `integration_time` write fails with `Operation not supported`
+| `CAL_ATIME` factory override is active -- expected behavior; see the
+  probe-time `dev_warn` in dmesg.
+
+| Harness FAIL lines
+| The message states observation vs. expectation; start from the first
+  failing test (later ones may cascade from it).
+|===
