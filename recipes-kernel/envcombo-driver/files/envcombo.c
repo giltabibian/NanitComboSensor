@@ -94,32 +94,26 @@ static int envcombo_update_bits(struct i2c_client *client, u8 reg, u8 mask, u8 v
 	return envcombo_write_reg(client, reg, (ret & ~mask) | (val & mask));
 }
 
-/* 16-bit big-endian register pair (MSB first). */
+/*
+ * 16-bit big-endian register pair (MSB first), accessed as a single bus
+ * transaction so the device cannot update the pair (e.g. latch a new ALS
+ * sample in continuous mode) between the two byte accesses.
+ */
 static int envcombo_read_reg16(struct i2c_client *client, u8 reg, u16 *val)
 {
-	int msb, lsb;
+	int ret;
 
-	msb = envcombo_read_reg(client, reg);
-	if (msb < 0)
-		return msb;
+	ret = i2c_smbus_read_word_swapped(client, reg);
+	if (ret < 0)
+		return ret;
 
-	lsb = envcombo_read_reg(client, reg + 1);
-	if (lsb < 0)
-		return lsb;
-
-	*val = ((u16)msb << 8) | (u16)lsb;
+	*val = ret;
 	return 0;
 }
 
 static int envcombo_write_reg16(struct i2c_client *client, u8 reg, u16 val)
 {
-	int ret;
-
-	ret = envcombo_write_reg(client, reg, val >> 8);
-	if (ret < 0)
-		return ret;
-
-	return envcombo_write_reg(client, reg + 1, val & 0xFF);
+	return i2c_smbus_write_word_swapped(client, reg, val);
 }
 
 struct envcombo_data {
@@ -132,12 +126,13 @@ struct envcombo_data {
 	u8 als_time_idx;
 	u8 calib_again;
 	u8 calib_atime;
+	/* (integer, micro) pair advertised when CAL_ATIME fixes the time */
+	int calib_time_avail[2];
 
 	u16 thresh_low;
 	u16 thresh_high;
 
-	bool ev_en_rising;
-	bool ev_en_falling;
+	bool ev_en;
 	bool buffer_en;
 
 	struct {
@@ -146,18 +141,27 @@ struct envcombo_data {
 	} scan __aligned(8);
 };
 
+/*
+ * The device signals a threshold crossing with a single direction-less
+ * ALS_INT bit, so the low/high threshold values are exposed through the
+ * falling/rising VALUE attributes while the event itself is enabled and
+ * reported with IIO_EV_DIR_EITHER.
+ */
 static const struct iio_event_spec envcombo_als_event_specs[] = {
 	{
 		.type = IIO_EV_TYPE_THRESH,
 		.dir = IIO_EV_DIR_RISING,
-		.mask_separate = BIT(IIO_EV_INFO_VALUE) |
-				 BIT(IIO_EV_INFO_ENABLE),
+		.mask_separate = BIT(IIO_EV_INFO_VALUE),
 	},
 	{
 		.type = IIO_EV_TYPE_THRESH,
 		.dir = IIO_EV_DIR_FALLING,
-		.mask_separate = BIT(IIO_EV_INFO_VALUE) |
-				 BIT(IIO_EV_INFO_ENABLE),
+		.mask_separate = BIT(IIO_EV_INFO_VALUE),
+	},
+	{
+		.type = IIO_EV_TYPE_THRESH,
+		.dir = IIO_EV_DIR_EITHER,
+		.mask_separate = BIT(IIO_EV_INFO_ENABLE),
 	},
 };
 
@@ -187,29 +191,12 @@ static const struct iio_chan_spec envcombo_channels[] = {
 /* Caller must hold data->lock. */
 static int envcombo_update_power_mode(struct envcombo_data *data)
 {
-	bool active = data->buffer_en || data->ev_en_rising ||
-		      data->ev_en_falling;
+	bool active = data->buffer_en || data->ev_en;
 
 	return envcombo_update_bits(data->client, ENVCOMBO_REG_PWR_MODE,
 				     ENVCOMBO_PWR_MODE_MASK,
 				     active ? ENVCOMBO_PWR_CONTINUOUS :
 					      ENVCOMBO_PWR_SLEEP);
-}
-
-/* Caller must hold data->lock. */
-static int envcombo_update_event_en(struct envcombo_data *data)
-{
-	int ret;
-
-	if (data->ev_en_rising || data->ev_en_falling) {
-		ret = envcombo_update_bits(data->client, ENVCOMBO_REG_INT_CFG,
-					    ENVCOMBO_INT_CFG_EN,
-					    ENVCOMBO_INT_CFG_EN);
-		if (ret)
-			return ret;
-	}
-
-	return envcombo_update_power_mode(data);
 }
 
 static int envcombo_read_als_raw(struct envcombo_data *data, int *val)
@@ -219,7 +206,7 @@ static int envcombo_read_als_raw(struct envcombo_data *data, int *val)
 
 	mutex_lock(&data->lock);
 
-	if (!data->buffer_en && !data->ev_en_rising && !data->ev_en_falling) {
+	if (!data->buffer_en && !data->ev_en) {
 		reinit_completion(&data->als_done);
 
 		ret = envcombo_write_reg(data->client, ENVCOMBO_REG_PWR_MODE,
@@ -284,6 +271,8 @@ static int envcombo_read_avail(struct iio_dev *indio_dev,
 				const int **vals, int *type, int *length,
 				long mask)
 {
+	struct envcombo_data *data = iio_priv(indio_dev);
+
 	switch (mask) {
 	case IIO_CHAN_INFO_HARDWAREGAIN:
 		*vals = envcombo_als_gain_table;
@@ -292,6 +281,12 @@ static int envcombo_read_avail(struct iio_dev *indio_dev,
 		return IIO_AVAIL_LIST;
 
 	case IIO_CHAN_INFO_INT_TIME:
+		if (data->calib_atime) {
+			*vals = data->calib_time_avail;
+			*type = IIO_VAL_INT_PLUS_MICRO;
+			*length = ARRAY_SIZE(data->calib_time_avail);
+			return IIO_AVAIL_LIST;
+		}
 		*vals = envcombo_als_time_avail;
 		*type = IIO_VAL_INT_PLUS_MICRO;
 		*length = ARRAY_SIZE(envcombo_als_time_avail);
@@ -448,14 +443,7 @@ static int envcombo_read_event_config(struct iio_dev *indio_dev,
 {
 	struct envcombo_data *data = iio_priv(indio_dev);
 
-	switch (dir) {
-	case IIO_EV_DIR_RISING:
-		return READ_ONCE(data->ev_en_rising);
-	case IIO_EV_DIR_FALLING:
-		return READ_ONCE(data->ev_en_falling);
-	default:
-		return -EINVAL;
-	}
+	return READ_ONCE(data->ev_en);
 }
 
 static int envcombo_write_event_config(struct iio_dev *indio_dev,
@@ -468,20 +456,8 @@ static int envcombo_write_event_config(struct iio_dev *indio_dev,
 	int ret;
 
 	mutex_lock(&data->lock);
-
-	switch (dir) {
-	case IIO_EV_DIR_RISING:
-		WRITE_ONCE(data->ev_en_rising, !!state);
-		break;
-	case IIO_EV_DIR_FALLING:
-		WRITE_ONCE(data->ev_en_falling, !!state);
-		break;
-	default:
-		mutex_unlock(&data->lock);
-		return -EINVAL;
-	}
-
-	ret = envcombo_update_event_en(data);
+	WRITE_ONCE(data->ev_en, !!state);
+	ret = envcombo_update_power_mode(data);
 	mutex_unlock(&data->lock);
 
 	return ret;
@@ -553,50 +529,23 @@ static irqreturn_t envcombo_irq_thread(int irq, void *private)
 			iio_trigger_poll(data->trig);
 	}
 
-	if (status & ENVCOMBO_STATUS_ALS_INT) {
-		bool en_rising = READ_ONCE(data->ev_en_rising);
-		bool en_falling = READ_ONCE(data->ev_en_falling);
-
-		/*
-		 * The hardware reports threshold crossings via a single
-		 * ALS_INT bit with no direction info, so disambiguate by
-		 * reading the current sample and comparing against the
-		 * configured thresholds. If the sample has already moved
-		 * back in range by the time we read it, the event is
-		 * dropped rather than misreported.
-		 *
-		 * Avoid data->lock here: this is a threaded IRQF_ONESHOT
-		 * handler, so blocking on a mutex held by the raw-read path
-		 * (up to ENVCOMBO_RAW_READ_TIMEOUT_MS) would delay re-arming
-		 * the interrupt. The ev_en_ and thresh_ fields are
-		 * snapshotted with READ_ONCE() instead, paired with
-		 * WRITE_ONCE() on the sysfs write side.
-		 */
-		if (en_rising || en_falling) {
-			u16 light;
-			s64 ts;
-			int ret;
-
-			ret = envcombo_read_reg16(data->client, ENVCOMBO_REG_ALS_MSB, &light);
-			if (!ret) {
-				ts = iio_get_time_ns(indio_dev);
-
-				if (en_rising && light >= READ_ONCE(data->thresh_high))
-					iio_push_event(indio_dev,
-						       IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
-									     IIO_EV_TYPE_THRESH,
-									     IIO_EV_DIR_RISING),
-						       ts);
-
-				if (en_falling && light <= READ_ONCE(data->thresh_low))
-					iio_push_event(indio_dev,
-						       IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
-									     IIO_EV_TYPE_THRESH,
-									     IIO_EV_DIR_FALLING),
-						       ts);
-			}
-		}
-	}
+	/*
+	 * The hardware reports threshold crossings via a single ALS_INT
+	 * bit with no direction information, so the event is reported as
+	 * IIO_EV_DIR_EITHER.
+	 *
+	 * Avoid data->lock here: this is a threaded IRQF_ONESHOT handler,
+	 * so blocking on a mutex held by the raw-read path (up to
+	 * ENVCOMBO_RAW_READ_TIMEOUT_MS) would delay re-arming the
+	 * interrupt. ev_en is snapshotted with READ_ONCE() instead,
+	 * paired with WRITE_ONCE() on the sysfs write side.
+	 */
+	if ((status & ENVCOMBO_STATUS_ALS_INT) && READ_ONCE(data->ev_en))
+		iio_push_event(indio_dev,
+			       IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
+						    IIO_EV_TYPE_THRESH,
+						    IIO_EV_DIR_EITHER),
+			       iio_get_time_ns(indio_dev));
 
 	return IRQ_HANDLED;
 }
@@ -617,7 +566,8 @@ static int envcombo_probe(struct i2c_client *client)
 		return -EINVAL;
 
 	if (!i2c_check_functionality(client->adapter,
-				      I2C_FUNC_SMBUS_BYTE_DATA))
+				      I2C_FUNC_SMBUS_BYTE_DATA |
+				      I2C_FUNC_SMBUS_WORD_DATA))
 		return -EOPNOTSUPP;
 
 	indio_dev = devm_iio_device_alloc(dev, sizeof(*data));
@@ -650,10 +600,13 @@ static int envcombo_probe(struct i2c_client *client)
 	if (ret < 0)
 		return ret;
 	data->calib_atime = ret;
-	if (data->calib_atime)
+	if (data->calib_atime) {
+		data->calib_time_avail[0] = 0;
+		data->calib_time_avail[1] = data->calib_atime * 1000;
 		dev_warn(dev,
 			 "factory calibration overrides ALS integration time to %u ms; integration_time is read-only\n",
 			 data->calib_atime);
+	}
 
 	data->als_gain_idx = ENVCOMBO_DEFAULT_GAIN_IDX;
 	data->als_time_idx = ENVCOMBO_DEFAULT_TIME_IDX;
@@ -665,6 +618,12 @@ static int envcombo_probe(struct i2c_client *client)
 	if (ret)
 		return ret;
 
+	/*
+	 * INT_EN on, latched so a crossing is held until STATUS is read.
+	 * The interrupt line pulses once per STATUS 0->1 transition, so
+	 * INT_POL is left clear (active-low) and the IRQ is requested as
+	 * falling-edge below.
+	 */
 	ret = envcombo_write_reg(client, ENVCOMBO_REG_INT_CFG,
 				  ENVCOMBO_INT_CFG_EN | ENVCOMBO_INT_CFG_LATCH);
 	if (ret)
@@ -689,7 +648,7 @@ static int envcombo_probe(struct i2c_client *client)
 
 	ret = devm_request_threaded_irq(dev, client->irq, NULL,
 					 envcombo_irq_thread,
-					 IRQF_TRIGGER_LOW | IRQF_ONESHOT,
+					 IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
 					 "envcombo", indio_dev);
 	if (ret)
 		return ret;

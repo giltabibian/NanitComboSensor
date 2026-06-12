@@ -11,3 +11,7 @@ SRC_URI = "file://envcombo.c \
 S = "${WORKDIR}"
 
 RPROVIDES:${PN} += "kernel-module-envcombo"
+
+# Load at boot; binds as soon as the simulator registers the i2c client,
+# regardless of which module comes up first.
+KERNEL_MODULE_AUTOLOAD += "envcombo"

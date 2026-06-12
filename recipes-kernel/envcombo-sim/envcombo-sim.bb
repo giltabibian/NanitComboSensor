@@ -11,3 +11,7 @@ SRC_URI = "file://i2c-envcombo-sim.c \
 S = "${WORKDIR}"
 
 RPROVIDES:${PN} += "kernel-module-i2c-envcombo-sim"
+
+# The simulator is not bound to real hardware, so nothing autoloads it;
+# load it at boot to create the adapter and the "envcombo" client.
+KERNEL_MODULE_AUTOLOAD += "i2c-envcombo-sim"
