@@ -1,0 +1,5 @@
+# Rust build output (envcombo-test harness; matches the dir at any depth)
+target/
+
+# ImHex / debugfs capture artifacts (see docs/debugging.adoc)
+*.bin
