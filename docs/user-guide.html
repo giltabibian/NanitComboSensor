@@ -760,22 +760,23 @@ echo $?             # 0 = all passed, 1 = at least one failure</code></pre>
 </div>
 <div class="listingblock">
 <div class="content">
-<pre>envcombo driver test harness (10 tests, seed 4675903481288702464)
-[1/10] module-loading               PASS
-[2/10] direct-als-read              PASS
-[3/10] gain-and-integration-time    PASS
-[4/10] threshold-attributes         PASS
-[5/10] threshold-events             PASS
-[6/10] triggered-buffer             PASS
-[7/10] buffer-timestamp-accuracy    PASS
-[8/10] power-fsm-transitions        PASS
-[9/10] module-unloading             PASS
-[10/10] kernel-log-health           PASS
-RESULT: all 10 tests passed (seed 4675903481288702464)</pre>
+<pre>envcombo driver test harness (11 tests, seed 4675903481288702464)
+[1/11] module-loading               PASS
+[2/11] direct-als-read              PASS
+[3/11] gain-and-integration-time    PASS
+[4/11] gain-response                PASS
+[5/11] threshold-attributes         PASS
+[6/11] threshold-events             PASS
+[7/11] triggered-buffer             PASS
+[8/11] buffer-timestamp-accuracy    PASS
+[9/11] power-fsm-transitions        PASS
+[10/11] module-unloading            PASS
+[11/11] kernel-log-health           PASS
+RESULT: all 11 tests passed (seed 4675903481288702464)</pre>
 </div>
 </div>
 <div class="paragraph">
-<p>The device tests (2&#8212;&#8203;8) run in a random order each time, seeded from the
+<p>The device tests (2&#8212;&#8203;9) run in a random order each time, seeded from the
 clock, to prove they are order-independent; module-loading stays first and
 module-unloading / kernel-log-health stay last. The seed is printed so a
 failing order can be replayed deterministically:</p>
@@ -884,7 +885,7 @@ drift on the second and later continuation lines&#8201;&#8212;&#8201;review thos
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-13 07:56:46 +0300
+Last updated 2026-06-13 08:08:56 +0300
 </div>
 </div>
 </body>

@@ -112,6 +112,7 @@ fn main() {
         ("module-loading", test_module_loading),
         ("direct-als-read", test_direct_read),
         ("gain-and-integration-time", test_gain_and_time),
+        ("gain-response", test_gain_response),
         ("threshold-attributes", test_threshold_attrs),
         ("threshold-events", test_events),
         ("triggered-buffer", test_buffer),
@@ -570,6 +571,72 @@ fn test_gain_and_time(ctx: &mut Ctx) -> TestResult {
 
     // No explicit restore needed: reset_baseline() re-establishes the
     // defaults at the start of every test.
+    Ok(())
+}
+
+/// Functional gain check. test_gain_and_time proves the gain *setting*
+/// reaches the CFG register and the reported scale, but not that gain
+/// actually amplifies the measurement. Here we sweep all gains against live
+/// readings and assert two complementary properties:
+///   1. the raw value grows with gain (the simulator's reading is
+///      proportional to gain), catching a gain that is ignored or inverted;
+///   2. the gain-compensated value `raw * scale` is gain-independent, i.e.
+///      the reported scale correctly undoes the gain.
+/// A one-shot conversion is latched synchronously during the I2C write, so a
+/// back-to-back sweep sees an essentially frozen signal. The only degenerate
+/// ramp positions -- sitting at zero, or wrapping mid-sweep -- show up as a
+/// non-increasing raw sequence, so we briefly retry those rather than risk a
+/// flaky failure; a genuine gain fault is non-increasing on *every* attempt
+/// and still fails once the retries are exhausted.
+fn test_gain_response(ctx: &mut Ctx) -> TestResult {
+    reset_baseline(ctx)?; // gain 1, integration time 200 ms, thresholds open
+    let gain_attr = attr(ctx, "in_illuminance_hardwaregain");
+    let scale_attr = attr(ctx, "in_illuminance_scale");
+    let raw_attr = attr(ctx, "in_illuminance_raw");
+    const GAINS: [u32; 4] = [1, 4, 16, 64];
+
+    // One burst of one-shot reads, one per gain, taken as close together as
+    // possible so the ramp barely moves between them. Returns (gain, raw,
+    // gain-compensated value) per gain.
+    let sweep = || -> Result<Vec<(u32, u32, f64)>, String> {
+        let mut out = Vec::with_capacity(GAINS.len());
+        for g in GAINS {
+            sysfs_write(&gain_attr, &g.to_string())?;
+            let scale = read_f64(&scale_attr)?;
+            let raw = read_u32(&raw_attr)?;
+            out.push((g, raw, raw as f64 * scale));
+        }
+        Ok(out)
+    };
+    let increasing = |d: &[(u32, u32, f64)]| d.windows(2).all(|w| w[1].1 > w[0].1);
+
+    let mut data = sweep()?;
+    for _ in 0..5 {
+        if increasing(&data) {
+            break;
+        }
+        sleep(Duration::from_millis(60)); // advance the ramp off the boundary
+        data = sweep()?;
+    }
+    check!(
+        increasing(&data),
+        "raw did not increase with gain: {:?}",
+        data.iter().map(|&(g, r, _)| (g, r)).collect::<Vec<_>>()
+    );
+
+    // scale must undo the gain: every compensated reading lands on the same
+    // physical value (spread bounded by per-gain rounding plus the tiny ramp
+    // drift across the burst).
+    let min = data.iter().map(|&(_, _, c)| c).fold(f64::INFINITY, f64::min);
+    let max = data.iter().map(|&(_, _, c)| c).fold(f64::NEG_INFINITY, f64::max);
+    check!(
+        max - min <= 3.0,
+        "gain-compensated readings disagree by {:.2} (raw*scale per gain: {:?})",
+        max - min,
+        data.iter().map(|&(g, _, c)| (g, c)).collect::<Vec<_>>()
+    );
+
+    expect_power_mode(PWR_SLEEP, "after gain-sweep one-shot reads")?;
     Ok(())
 }
 

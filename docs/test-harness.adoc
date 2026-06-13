@@ -43,9 +43,20 @@ caught a trigger refcount double-put on `rmmod` and an
 
 == Test plan
 
-The 10 tests run sequentially; configuration tests restore the defaults they
-started from, and the power-mode assertions rely on events/buffer being
-disabled in between. Exit code is 0 only if every test passes.
+The 11 tests run one at a time (never concurrently); the exit code is 0 only
+if every test passes.
+
+The *order*, though, is deliberately randomized rather than fixed:
+`module-loading` always runs first and `module-unloading` /
+`kernel-log-health` always run last, but the device tests in between are
+shuffled by a seeded PRNG on every run. Each device test calls
+`reset_baseline()` first (and the configuration tests restore the defaults
+they started from), so the suite is order-independent by construction -- the
+shuffle is what actively proves that isolation holds, rather than the suite
+quietly depending on a fixed order. The seed is printed at startup and can be
+pinned with `--seed=N` or `ENVCOMBO_TEST_SEED=N` to replay a specific order
+deterministically. The numbering in the table below is the source order in
+which the tests are listed, not the order they run in.
 
 [cols="1,3,5", options="header"]
 |===
@@ -70,12 +81,20 @@ disabled in between. Exit code is 0 only if every test passes.
   (gain 3, time 0.075 s) are rejected with state untouched; defaults
   restored.
 
-| 4 | `threshold-attributes`
+| 4 | `gain-response`
+| The *functional* counterpart to `gain-and-integration-time`: sweeps all
+  four gains with live one-shot reads and asserts (a) the raw value grows
+  with gain -- catching a gain that is ignored or inverted -- and (b) the
+  gain-compensated value `raw \* scale` is gain-independent, i.e. the
+  reported scale actually undoes the gain. Degenerate ramp positions (signal
+  at zero or wrapping mid-sweep) are retried so only a real fault fails.
+
+| 5 | `threshold-attributes`
 | Threshold writes land in the big-endian TH_LOW/TH_HIGH register pairs;
   inverted-window, > 16-bit, and negative writes are rejected; registers
   unchanged after the rejected writes.
 
-| 5 | `threshold-events`
+| 6 | `threshold-events`
 | Event fd obtained via `IIO_GET_EVENT_FD_IOCTL`. With a tight [0, 5]
   window, an above-window crossing delivers an event whose 64-bit id is
   exactly light / thresh / EITHER with a positive timestamp; the window is
@@ -84,14 +103,14 @@ disabled in between. Exit code is 0 only if every test passes.
   window, *no* event may arrive (spurious-event check); power mode is
   CONTINUOUS while enabled and SLEEP after disable.
 
-| 6 | `triggered-buffer`
+| 7 | `triggered-buffer`
 | Scan element type is `le:u16/16>>0`; with the driver's own trigger and
   the buffer enabled: PWR_MODE is CONTINUOUS, direct reads still work,
   >= 8 samples arrive within 8 s, every sample is in range, timestamps are
   strictly monotonic with a median spacing of ~200 ms (the interrupt
   cadence), and teardown returns the device to SLEEP.
 
-| 7 | `buffer-timestamp-accuracy`
+| 8 | `buffer-timestamp-accuracy`
 | The *absolute* timestamp, complementing the spacing check in
   `triggered-buffer`: the device's `current_timestamp_clock` is mapped to the
   matching POSIX clock, the buffer read is bracketed with `clock_gettime()`
@@ -99,19 +118,19 @@ disabled in between. Exit code is 0 only if every test passes.
   inside that wall-clock window -- catching a wrong clock source, a
   stuck/zero stamp, or a constant offset a delta-only check cannot see.
 
-| 8 | `power-fsm-transitions`
+| 9 | `power-fsm-transitions`
 | The multi-consumer FSM cases: events+buffer both active; a raw read while
   active stays in CONTINUOUS (no ONE-SHOT detour); disabling events while
   the buffer runs keeps CONTINUOUS *and* the buffer still delivers a fresh
   sample (backlog drained first); the mirror case (buffer off, events on);
   last consumer off -> SLEEP and the one-shot path works again.
 
-| 9 | `module-unloading`
+| 10 | `module-unloading`
 | `rmmod` of driver then simulator succeeds; the IIO device and the
   simulator's debugfs entry disappear; both modules then reload cleanly and
   the device re-probes into SLEEP.
 
-| 10 | `kernel-log-health`
+| 11 | `kernel-log-health`
 | `dmesg` contains no WARN/BUG/Oops/refcount/call-trace diagnostics from
   the entire run, including the unload/reload cycle.
 |===
@@ -137,8 +156,8 @@ I/O paths are written defensively:
 Each test prints one line:
 
 ----
-[6/10] triggered-buffer             PASS
-[6/10] triggered-buffer             FAIL: median sample spacing 612 ms, expected ~200 ms
+[7/11] triggered-buffer             PASS
+[7/11] triggered-buffer             FAIL: median sample spacing 612 ms, expected ~200 ms
 ----
 
 The failure message always states the observed value and the expectation.

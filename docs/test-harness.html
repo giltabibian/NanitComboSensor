@@ -512,9 +512,21 @@ caught a trigger refcount double-put on <code>rmmod</code> and an
 <h2 id="_test_plan">2. Test plan</h2>
 <div class="sectionbody">
 <div class="paragraph">
-<p>The 10 tests run sequentially; configuration tests restore the defaults they
-started from, and the power-mode assertions rely on events/buffer being
-disabled in between. Exit code is 0 only if every test passes.</p>
+<p>The 11 tests run one at a time (never concurrently); the exit code is 0 only
+if every test passes.</p>
+</div>
+<div class="paragraph">
+<p>The <strong>order</strong>, though, is deliberately randomized rather than fixed:
+<code>module-loading</code> always runs first and <code>module-unloading</code> /
+<code>kernel-log-health</code> always run last, but the device tests in between are
+shuffled by a seeded PRNG on every run. Each device test calls
+<code>reset_baseline()</code> first (and the configuration tests restore the defaults
+they started from), so the suite is order-independent by construction&#8201;&#8212;&#8201;the
+shuffle is what actively proves that isolation holds, rather than the suite
+quietly depending on a fixed order. The seed is printed at startup and can be
+pinned with <code>--seed=N</code> or <code>ENVCOMBO_TEST_SEED=N</code> to replay a specific order
+deterministically. The numbering in the table below is the source order in
+which the tests are listed, not the order they run in.</p>
 </div>
 <table class="tableblock frame-all grid-all stretch">
 <colgroup>
@@ -557,13 +569,23 @@ disabled in between. Exit code is 0 only if every test passes.</p>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock">4</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>gain-response</code></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">The <strong>functional</strong> counterpart to <code>gain-and-integration-time</code>: sweeps all
+  four gains with live one-shot reads and asserts (a) the raw value grows
+  with gain&#8201;&#8212;&#8201;catching a gain that is ignored or inverted&#8201;&#8212;&#8201;and (b) the
+  gain-compensated value <code>raw \* scale</code> is gain-independent, i.e. the
+  reported scale actually undoes the gain. Degenerate ramp positions (signal
+  at zero or wrapping mid-sweep) are retried so only a real fault fails.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">5</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>threshold-attributes</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Threshold writes land in the big-endian TH_LOW/TH_HIGH register pairs;
   inverted-window, &gt; 16-bit, and negative writes are rejected; registers
   unchanged after the rejected writes.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">5</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">6</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>threshold-events</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Event fd obtained via <code>IIO_GET_EVENT_FD_IOCTL</code>. With a tight [0, 5]
   window, an above-window crossing delivers an event whose 64-bit id is
@@ -574,7 +596,7 @@ disabled in between. Exit code is 0 only if every test passes.</p>
   CONTINUOUS while enabled and SLEEP after disable.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">6</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">7</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>triggered-buffer</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Scan element type is <code>le:u16/16&gt;&gt;0</code>; with the driver&#8217;s own trigger and
   the buffer enabled: PWR_MODE is CONTINUOUS, direct reads still work,
@@ -583,7 +605,7 @@ disabled in between. Exit code is 0 only if every test passes.</p>
   cadence), and teardown returns the device to SLEEP.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">7</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">8</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>buffer-timestamp-accuracy</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">The <strong>absolute</strong> timestamp, complementing the spacing check in
   <code>triggered-buffer</code>: the device&#8217;s <code>current_timestamp_clock</code> is mapped to the
@@ -593,7 +615,7 @@ disabled in between. Exit code is 0 only if every test passes.</p>
   stuck/zero stamp, or a constant offset a delta-only check cannot see.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">8</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">9</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>power-fsm-transitions</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">The multi-consumer FSM cases: events+buffer both active; a raw read while
   active stays in CONTINUOUS (no ONE-SHOT detour); disabling events while
@@ -602,14 +624,14 @@ disabled in between. Exit code is 0 only if every test passes.</p>
   last consumer off &#8594; SLEEP and the one-shot path works again.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">9</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">10</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>module-unloading</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>rmmod</code> of driver then simulator succeeds; the IIO device and the
   simulator&#8217;s debugfs entry disappear; both modules then reload cleanly and
   the device re-probes into SLEEP.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">10</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">11</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>kernel-log-health</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>dmesg</code> contains no WARN/BUG/Oops/refcount/call-trace diagnostics from
   the entire run, including the unload/reload cycle.</p></td>
@@ -657,8 +679,8 @@ are appended to the failure message rather than masking it.</p>
 </div>
 <div class="listingblock">
 <div class="content">
-<pre>[6/10] triggered-buffer             PASS
-[6/10] triggered-buffer             FAIL: median sample spacing 612 ms, expected ~200 ms</pre>
+<pre>[7/11] triggered-buffer             PASS
+[7/11] triggered-buffer             FAIL: median sample spacing 612 ms, expected ~200 ms</pre>
 </div>
 </div>
 <div class="paragraph">
@@ -673,7 +695,7 @@ later tests fail for want of a device&#8201;&#8212;&#8201;read the first failure
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-13 07:56:17 +0300
+Last updated 2026-06-13 08:10:02 +0300
 </div>
 </div>
 </body>
