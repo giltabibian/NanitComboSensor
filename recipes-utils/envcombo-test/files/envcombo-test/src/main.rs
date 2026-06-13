@@ -1023,9 +1023,16 @@ fn test_timestamp(ctx: &mut Ctx) -> TestResult {
         Ok(())
     })();
 
-    let teardown = set_buffer(ctx, false);
-    result?;
-    teardown?;
+    let teardown_res = set_buffer(ctx, false);
+    match result {
+        Ok(()) => teardown_res?,
+        Err(e) => {
+            if let Err(t) = teardown_res {
+                return Err(format!("{}; teardown: {}", e, t));
+            }
+            return Err(e);
+        }
+    }
     expect_power_mode(PWR_SLEEP, "after disabling buffer")?;
     Ok(())
 }
