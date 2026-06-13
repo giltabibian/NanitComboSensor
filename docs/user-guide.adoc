@@ -247,19 +247,12 @@ envcombo driver test harness (11 tests, seed 4675903481288702464)
 RESULT: all 11 tests passed (seed 4675903481288702464)
 ----
 
-The device tests (2--9) run in a random order each time, seeded from the
-clock, to prove they are order-independent; module-loading stays first and
-module-unloading / kernel-log-health stay last. The seed is printed so a
-failing order can be replayed deterministically:
-
-[source,shell]
-----
-ENVCOMBO_TEST_SEED=4675903481288702464 envcombo-test   # or: envcombo-test --seed=4675903481288702464
-----
-
-See link:test-harness.html[the test harness page] for what each test
-asserts. After a run, `dmesg | tail -20` should show only the clean
-unload/reload messages from module-loading and module-unloading.
+The device tests run in a seeded random order each time to prove they are
+order-independent (the seed is printed so a failing order can be replayed).
+See link:test-harness.html[the test harness page] for the per-test
+assertions, the ordering rules, and how to replay a seed. After a run,
+`dmesg | tail -20` should show only the clean unload/reload messages from
+module-loading and module-unloading.
 
 == Check the driver coding style
 

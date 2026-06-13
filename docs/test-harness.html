@@ -690,12 +690,21 @@ can gate CI directly. Tests after a failed one still run (each test
 re-establishes what it needs), but a failure in <code>module-loading</code> makes most
 later tests fail for want of a device&#8201;&#8212;&#8201;read the first failure first.</p>
 </div>
+<div class="paragraph">
+<p>When a failure looks order-dependent, replay the exact run using the seed
+printed in the run&#8217;s banner:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-shell" data-lang="shell">ENVCOMBO_TEST_SEED=4675903481288702464 envcombo-test   # or: envcombo-test --seed=4675903481288702464</code></pre>
+</div>
+</div>
 </div>
 </div>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-13 08:10:02 +0300
+Last updated 2026-06-13 08:17:30 +0300
 </div>
 </div>
 </body>

@@ -165,3 +165,11 @@ The process exit code is `0` on full pass and `1` otherwise, so the harness
 can gate CI directly. Tests after a failed one still run (each test
 re-establishes what it needs), but a failure in `module-loading` makes most
 later tests fail for want of a device -- read the first failure first.
+
+When a failure looks order-dependent, replay the exact run using the seed
+printed in the run's banner:
+
+[source,shell]
+----
+ENVCOMBO_TEST_SEED=4675903481288702464 envcombo-test   # or: envcombo-test --seed=4675903481288702464
+----

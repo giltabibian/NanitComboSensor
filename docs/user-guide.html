@@ -776,20 +776,12 @@ RESULT: all 11 tests passed (seed 4675903481288702464)</pre>
 </div>
 </div>
 <div class="paragraph">
-<p>The device tests (2&#8212;&#8203;9) run in a random order each time, seeded from the
-clock, to prove they are order-independent; module-loading stays first and
-module-unloading / kernel-log-health stay last. The seed is printed so a
-failing order can be replayed deterministically:</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">ENVCOMBO_TEST_SEED=4675903481288702464 envcombo-test   # or: envcombo-test --seed=4675903481288702464</code></pre>
-</div>
-</div>
-<div class="paragraph">
-<p>See <a href="test-harness.html">the test harness page</a> for what each test
-asserts. After a run, <code>dmesg | tail -20</code> should show only the clean
-unload/reload messages from module-loading and module-unloading.</p>
+<p>The device tests run in a seeded random order each time to prove they are
+order-independent (the seed is printed so a failing order can be replayed).
+See <a href="test-harness.html">the test harness page</a> for the per-test
+assertions, the ordering rules, and how to replay a seed. After a run,
+<code>dmesg | tail -20</code> should show only the clean unload/reload messages from
+module-loading and module-unloading.</p>
 </div>
 </div>
 </div>
@@ -885,7 +877,7 @@ drift on the second and later continuation lines&#8201;&#8212;&#8201;review thos
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-13 08:08:56 +0300
+Last updated 2026-06-13 08:17:45 +0300
 </div>
 </div>
 </body>
