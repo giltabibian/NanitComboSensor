@@ -43,7 +43,7 @@ caught a trigger refcount double-put on `rmmod` and an
 
 == Test plan
 
-The 9 tests run sequentially; configuration tests restore the defaults they
+The 10 tests run sequentially; configuration tests restore the defaults they
 started from, and the power-mode assertions rely on events/buffer being
 disabled in between. Exit code is 0 only if every test passes.
 
@@ -91,19 +91,27 @@ disabled in between. Exit code is 0 only if every test passes.
   strictly monotonic with a median spacing of ~200 ms (the interrupt
   cadence), and teardown returns the device to SLEEP.
 
-| 7 | `power-fsm-transitions`
+| 7 | `buffer-timestamp-accuracy`
+| The *absolute* timestamp, complementing the spacing check in
+  `triggered-buffer`: the device's `current_timestamp_clock` is mapped to the
+  matching POSIX clock, the buffer read is bracketed with `clock_gettime()`
+  on that clock, and every fresh sample's stamp must be non-zero and land
+  inside that wall-clock window -- catching a wrong clock source, a
+  stuck/zero stamp, or a constant offset a delta-only check cannot see.
+
+| 8 | `power-fsm-transitions`
 | The multi-consumer FSM cases: events+buffer both active; a raw read while
   active stays in CONTINUOUS (no ONE-SHOT detour); disabling events while
   the buffer runs keeps CONTINUOUS *and* the buffer still delivers a fresh
   sample (backlog drained first); the mirror case (buffer off, events on);
   last consumer off -> SLEEP and the one-shot path works again.
 
-| 8 | `module-unloading`
+| 9 | `module-unloading`
 | `rmmod` of driver then simulator succeeds; the IIO device and the
   simulator's debugfs entry disappear; both modules then reload cleanly and
   the device re-probes into SLEEP.
 
-| 9 | `kernel-log-health`
+| 10 | `kernel-log-health`
 | `dmesg` contains no WARN/BUG/Oops/refcount/call-trace diagnostics from
   the entire run, including the unload/reload cycle.
 |===
@@ -129,8 +137,8 @@ I/O paths are written defensively:
 Each test prints one line:
 
 ----
-[6/9] triggered-buffer             PASS
-[6/9] triggered-buffer             FAIL: median sample spacing 612 ms, expected ~200 ms
+[6/10] triggered-buffer             PASS
+[6/10] triggered-buffer             FAIL: median sample spacing 612 ms, expected ~200 ms
 ----
 
 The failure message always states the observed value and the expectation.

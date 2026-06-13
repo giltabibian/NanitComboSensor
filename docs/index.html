@@ -478,7 +478,7 @@ provided device simulator and a Rust end-to-end test harness.</p>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="test-harness.html">2. Test Harness</a></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">The Rust end-to-end test harness: test plan and block diagram of the
-  harness / driver / simulator stack, what each of the 9 tests asserts and
+  harness / driver / simulator stack, what each of the 10 tests asserts and
   how it can fail, and the cross-checking strategy against the simulator&#8217;s
   debugfs register file.</p></td>
 </tr>
@@ -489,6 +489,13 @@ provided device simulator and a Rust end-to-end test harness.</p>
   from the shell (raw reads, gain/integration time, thresholds, events,
   triggered buffer), inspecting device registers, and running the test
   harness.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><a href="debugging.html">4. Manual Debugging &amp; Binary Inspection</a></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Host-side decoding of the device&#8217;s binary interfaces with ImHex and the
+  <code>docs/imhex/</code> pattern files: capturing and field-decoding the simulator
+  register file, plotting a captured ALS buffer, and reading full 16-byte
+  records (including how the nanosecond timestamp is laid out and read).</p></td>
 </tr>
 </tbody>
 </table>
@@ -560,7 +567,7 @@ to the sources); render the HTML pages with <code>asciidoctor docs/*.adoc</code>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-12 14:34:03 +0300
+Last updated 2026-06-13 07:56:22 +0300
 </div>
 </div>
 </body>

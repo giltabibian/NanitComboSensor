@@ -5,7 +5,7 @@
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="generator" content="Asciidoctor 2.0.16">
-<title>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Test Harness</title>
+<title>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Manual Debugging &amp; Binary Inspection</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Open+Sans:300,300italic,400,400italic,600,600italic%7CNoto+Serif:400,400italic,700,700italic%7CDroid+Sans+Mono:400,700">
 <style>
 /*! Asciidoctor default stylesheet | MIT License | https://asciidoctor.org */
@@ -439,14 +439,24 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </head>
 <body class="article">
 <div id="header">
-<h1>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Test Harness</h1>
+<h1>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Manual Debugging &amp; Binary Inspection</h1>
 <div id="toc" class="toc">
 <div id="toctitle">Table of Contents</div>
 <ul class="sectlevel1">
-<li><a href="#_test_stack">1. Test stack</a></li>
-<li><a href="#_test_plan">2. Test plan</a></li>
-<li><a href="#_robustness_of_the_harness_itself">3. Robustness of the harness itself</a></li>
-<li><a href="#_interpreting_results">4. Interpreting results</a></li>
+<li><a href="#_inspecting_register_state_with_imhex">1. Inspecting register state with ImHex</a>
+<ul class="sectlevel2">
+<li><a href="#_step_1start_a_one_shot_listener_wsl2">1.1. Step 1&#8201;&#8212;&#8201;Start a one-shot listener (WSL2)</a></li>
+<li><a href="#_step_2set_thresholds_and_power_mode_guest">1.2. Step 2&#8201;&#8212;&#8201;Set thresholds and power mode (guest)</a></li>
+<li><a href="#_step_3dump_and_send_the_register_file_once">1.3. Step 3&#8201;&#8212;&#8201;Dump and send the register file once</a></li>
+<li><a href="#_step_4decode_in_imhex_windows">1.4. Step 4&#8201;&#8212;&#8201;Decode in ImHex (Windows)</a></li>
+</ul>
+</li>
+<li><a href="#_graphing_als_samples">2. Graphing ALS samples</a></li>
+<li><a href="#_full_records_with_timestamps">3. Full records with timestamps</a>
+<ul class="sectlevel2">
+<li><a href="#_reading_the_timestamp_nanoseconds_not_seconds">3.1. Reading the timestamp (nanoseconds, not seconds)</a></li>
+</ul>
+</li>
 </ul>
 </div>
 </div>
@@ -454,226 +464,283 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <div id="preamble">
 <div class="sectionbody">
 <div class="paragraph">
-<p><a href="index.html">&#8592; Back to documentation index</a></p>
+<p>Host-side inspection of the device&#8217;s binary interfaces: decoding the
+simulator&#8217;s register file and captured ALS buffers with
+<a href="https://imhex.werwolv.net/">ImHex</a> and the pattern files under
+<code>docs/imhex/</code>. This is a debugging/analysis workflow&#8201;&#8212;&#8201;for installing,
+booting, and operating the driver see
+<a href="user-guide.html">Installation, Build &amp; Run</a>; for a quick on-target
+register peek without leaving the guest, the <code>hexdump</code> of
+<code>/sys/kernel/debug/envcombo-sim/regs</code> shown there is enough.</p>
 </div>
 <div class="paragraph">
-<p>The test harness (<code>recipes-utils/envcombo-test/files/envcombo-test/src/main.rs</code>)
-is a single Rust binary, <code>envcombo-test</code>, that exercises the driver
-end-to-end through its real userspace ABI and reports a PASS/FAIL verdict
-per capability. It runs on the target (QEMU or hardware), needs root, and
-uses only <code>libc</code> beyond the standard library&#8201;&#8212;&#8201;pragmatically chosen so the
-image needs no extra runtime and the cargo recipe stays trivially
-fetchable.</p>
+<p>ImHex runs on the Windows host while QEMU runs under WSL2, so every capture
+below follows the same pattern: a one-shot <code>nc</code> listener in WSL2 (where the
+guest&#8217;s slirp gateway <code>10.0.2.2</code> resolves) writes the blob to a
+Windows-visible path, then the guest sends it.</p>
 </div>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_test_stack">1. Test stack</h2>
+<h2 id="_inspecting_register_state_with_imhex">1. Inspecting register state with ImHex</h2>
 <div class="sectionbody">
-<div class="imageblock">
+<div class="paragraph">
+<p>The simulator exposes its full register file at
+<code>/sys/kernel/debug/envcombo-sim/regs</code> (19 bytes, one byte per register,
+16-bit fields big-endian). Capturing that blob and decoding it with the
+<code>docs/imhex/envcombo-als.hexpat</code> pattern gives a field-by-field view of the
+device state at a chosen moment.</p>
+</div>
+<div class="paragraph">
+<p>This walkthrough captures <strong>one</strong> snapshot after putting the device into a
+known state.</p>
+</div>
+<div class="sect2">
+<h3 id="_step_1start_a_one_shot_listener_wsl2">1.1. Step 1&#8201;&#8212;&#8201;Start a one-shot listener (WSL2)</h3>
+<div class="paragraph">
+<p>Accept a single connection and write it where Windows ImHex can open it:</p>
+</div>
+<div class="listingblock">
 <div class="content">
-<img src="diagrams/svg/test-stack.svg" alt="Test stack block diagram">
+<pre class="highlight"><code class="language-sh" data-lang="sh">nc -l 7777 &gt; /mnt/c/Users/&lt;windows-user&gt;/regs.bin</code></pre>
+</div>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_step_2set_thresholds_and_power_mode_guest">1.2. Step 2&#8201;&#8212;&#8201;Set thresholds and power mode (guest)</h3>
+<div class="paragraph">
+<p>Drive the device through its real sysfs ABI, so the change goes through
+the I2C write path and lands in the actual registers:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-sh" data-lang="sh">cd /sys/bus/iio/devices/iio:device0     # adjust N if not device0
+
+# Thresholds -&gt; ALS_TH_LOW (0x08-09) / ALS_TH_HIGH (0x0A-0B).
+# Keep the window well-formed: low &lt;= high at every step.
+echo 100 &gt; events/in_illuminance_thresh_falling_value
+echo 800 &gt; events/in_illuminance_thresh_rising_value
+
+# Power mode is FSM-driven, not directly writable. Enabling a consumer
+# drives PWR_MODE (0x12) to CONTINUOUS (0x03); disabling all consumers
+# returns it to SLEEP (0x01).
+echo 1 &gt; events/in_illuminance_thresh_either_en</code></pre>
+</div>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_step_3dump_and_send_the_register_file_once">1.3. Step 3&#8201;&#8212;&#8201;Dump and send the register file once</h3>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-sh" data-lang="sh">nc 10.0.2.2 7777 &lt; /sys/kernel/debug/envcombo-sim/regs</code></pre>
 </div>
 </div>
 <div class="paragraph">
-<p>Three properties make the tests able to fail when behavior is wrong, rather
-than being superficial smoke checks:</p>
-</div>
-<div class="dlist">
-<dl>
-<dt class="hdlist1">Independent ground truth</dt>
-<dd>
-<p>The simulator exposes its raw register file at
-<code>/sys/kernel/debug/envcombo-sim/regs</code> (a side-effect-free snapshot&#8201;&#8212;&#8201;unlike an I2C STATUS read it clears nothing). Wherever the driver claims
-something via sysfs, the harness <strong>also</strong> asserts what actually landed in the
-device registers: CFG gain/time fields, both threshold register pairs,
-and the PWR_MODE register for every power-state assertion.</p>
-</dd>
-<dt class="hdlist1">Negative testing</dt>
-<dd>
-<p>Every validation path is exercised with inputs that must be rejected
-(unsupported gain, unsupported integration time, inverted threshold
-window, out-of-range and negative thresholds), and the harness then proves
-the rejected write left no side effects.</p>
-</dd>
-<dt class="hdlist1">Kernel-log health gate</dt>
-<dd>
-<p>The final test scans <code>dmesg</code> for <code>WARNING:</code> / <code>BUG:</code> / <code>Oops</code> /
-<code>refcount_t:</code> / <code>Call trace:</code> lines. A kernel splat fails the run even when
-the operation that caused it appeared to succeed&#8201;&#8212;&#8201;this is the test that
-caught a trigger refcount double-put on <code>rmmod</code> and an
-<code>iio_trigger_poll()</code>-from-thread-context bug during development.</p>
-</dd>
-</dl>
+<p>The listener from Step 1 receives the 19 bytes and exits; <code>regs.bin</code> now
+holds the snapshot.</p>
 </div>
 </div>
-</div>
-<div class="sect1">
-<h2 id="_test_plan">2. Test plan</h2>
-<div class="sectionbody">
+<div class="sect2">
+<h3 id="_step_4decode_in_imhex_windows">1.4. Step 4&#8201;&#8212;&#8201;Decode in ImHex (Windows)</h3>
 <div class="paragraph">
-<p>The 10 tests run sequentially; configuration tests restore the defaults they
-started from, and the power-mode assertions rely on events/buffer being
-disabled in between. Exit code is 0 only if every test passes.</p>
-</div>
-<table class="tableblock frame-all grid-all stretch">
-<colgroup>
-<col style="width: 11.1111%;">
-<col style="width: 33.3333%;">
-<col style="width: 55.5556%;">
-</colgroup>
-<thead>
-<tr>
-<th class="tableblock halign-left valign-top">#</th>
-<th class="tableblock halign-left valign-top">Test</th>
-<th class="tableblock halign-left valign-top">What it asserts (and how it can fail)</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">1</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>module-loading</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Both modules present (<code>modprobe</code> fallback if not autoloaded); debugfs
-  reachable; an IIO device named <code>envcombo</code> with chardev and
-  <code>envcombo-dev*</code> trigger appears within 5 s; device idle in SLEEP after
-  probe.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">2</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>direct-als-read</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Three one-shot reads via <code>in_illuminance_raw</code>, 600 ms apart: each value
-  within the range the default gain/time allows (&#8656; 250), PWR_MODE back in
-  SLEEP after every read, and the readings change over time (a stale or
-  never-running conversion fails).</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">3</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>gain-and-integration-time</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>_available</code> lists exactly the datasheet values; a valid gain write is
-  visible in sysfs readback <strong>and</strong> the CFG register <strong>and</strong> the reported scale
-  (0.25 at gain 4); a valid time write lands in CFG; unsupported values
-  (gain 3, time 0.075 s) are rejected with state untouched; defaults
-  restored.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">4</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>threshold-attributes</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Threshold writes land in the big-endian TH_LOW/TH_HIGH register pairs;
-  inverted-window, &gt; 16-bit, and negative writes are rejected; registers
-  unchanged after the rejected writes.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">5</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>threshold-events</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Event fd obtained via <code>IIO_GET_EVENT_FD_IOCTL</code>. With a tight [0, 5]
-  window, an above-window crossing delivers an event whose 64-bit id is
-  exactly light / thresh / EITHER with a positive timestamp; the window is
-  then re-armed the other way (below-window crossing) and a second event
-  with a later timestamp must arrive; with the level back inside the
-  window, <strong>no</strong> event may arrive (spurious-event check); power mode is
-  CONTINUOUS while enabled and SLEEP after disable.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">6</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>triggered-buffer</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Scan element type is <code>le:u16/16&gt;&gt;0</code>; with the driver&#8217;s own trigger and
-  the buffer enabled: PWR_MODE is CONTINUOUS, direct reads still work,
-  &gt;= 8 samples arrive within 8 s, every sample is in range, timestamps are
-  strictly monotonic with a median spacing of ~200 ms (the interrupt
-  cadence), and teardown returns the device to SLEEP.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">7</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>buffer-timestamp-accuracy</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">The <strong>absolute</strong> timestamp, complementing the spacing check in
-  <code>triggered-buffer</code>: the device&#8217;s <code>current_timestamp_clock</code> is mapped to the
-  matching POSIX clock, the buffer read is bracketed with <code>clock_gettime()</code>
-  on that clock, and every fresh sample&#8217;s stamp must be non-zero and land
-  inside that wall-clock window&#8201;&#8212;&#8201;catching a wrong clock source, a
-  stuck/zero stamp, or a constant offset a delta-only check cannot see.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">8</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>power-fsm-transitions</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">The multi-consumer FSM cases: events+buffer both active; a raw read while
-  active stays in CONTINUOUS (no ONE-SHOT detour); disabling events while
-  the buffer runs keeps CONTINUOUS <strong>and</strong> the buffer still delivers a fresh
-  sample (backlog drained first); the mirror case (buffer off, events on);
-  last consumer off &#8594; SLEEP and the one-shot path works again.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">9</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>module-unloading</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>rmmod</code> of driver then simulator succeeds; the IIO device and the
-  simulator&#8217;s debugfs entry disappear; both modules then reload cleanly and
-  the device re-probes into SLEEP.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">10</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>kernel-log-health</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>dmesg</code> contains no WARN/BUG/Oops/refcount/call-trace diagnostics from
-  the entire run, including the unload/reload cycle.</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_robustness_of_the_harness_itself">3. Robustness of the harness itself</h2>
-<div class="sectionbody">
-<div class="paragraph">
-<p>A test harness that fails for its own reasons is worse than none, so the
-I/O paths are written defensively:</p>
+<p>Open <code>C:\Users\&lt;windows-user&gt;\regs.bin</code>, load <code>docs/imhex/envcombo-als.hexpat</code>, and run
+it. The Pattern Data view should now show, for this capture:</p>
 </div>
 <div class="ulist">
 <ul>
 <li>
-<p>All non-blocking reads go through one helper (<code>poll_read_nonblock()</code>):
-<code>poll()</code> is retried on <code>EINTR</code>, a wakeup is only treated as data when
-<code>POLLIN</code> is set, <code>POLLERR</code>/<code>POLLHUP</code>/<code>POLLNVAL</code> are reported as distinct
-failures, and <code>EAGAIN</code> counts as "no data yet" rather than an error.</p>
+<p><code>pwr_mode = Continuous</code></p>
 </li>
 <li>
-<p>The event reader assembles the 16-byte <code>iio_event_data</code> record across
-short reads and <code>EINTR</code>, with a distinct message for EOF.</p>
+<p><code>als_th_low = 100</code>, <code>als_th_high = 800</code></p>
 </li>
 <li>
-<p>The buffer is read non-blocking with timeouts, so a silent trigger fails
-the test instead of hanging the harness.</p>
-</li>
-<li>
-<p>Buffer teardown runs even when the test body fails, and teardown errors
-are appended to the failure message rather than masking it.</p>
+<p><code>cfg.als_en = 1</code>, plus the live <code>als_out</code> reading</p>
 </li>
 </ul>
+</div>
+<div class="paragraph">
+<p>To capture a different state (e.g. the SLEEP baseline), disable the
+consumer (<code>echo 0 &gt; events/in_illuminance_thresh_either_en</code>) and repeat
+from Step 1.</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="images/imhex-regs-snapshot.png" alt="ImHex Pattern Data view of the envcombo register dump" width="900">
+</div>
+<div class="title">Figure 1. ImHex decoding a register snapshot via <code>docs/imhex/envcombo-als.hexpat</code>&#8201;&#8212;&#8201;here the SLEEP baseline (<code>pwr_mode = Sleep</code>, a 100/800 threshold window)</div>
+</div>
+<div class="admonitionblock note">
+<table>
+<tr>
+<td class="icon">
+<div class="title">Note</div>
+</td>
+<td class="content">
+<div class="paragraph">
+<p>The debugfs <code>regs</code> file is the source of truth for these captures: the
+simulator reconstructs the threshold and ALS bytes from its internal
+state on every read, so the dump always reflects the device as the driver
+left it. Writing register bytes <strong>into</strong> debugfs is not equivalent to the
+sysfs path above and is not used here.</p>
+</div>
+</td>
+</tr>
+</table>
+</div>
+<div class="admonitionblock note">
+<table>
+<tr>
+<td class="icon">
+<div class="title">Note</div>
+</td>
+<td class="content">
+<div class="paragraph">
+<p><code>docs/imhex/envcombo-als.hexpat</code> uses typed enums inside bitfields and LSB-first
+bitfield order, which is correct on current ImHex. If your build renders
+the CFG fields reversed (e.g. <code>als_en</code> landing in the low bits), add
+<code>#pragma bitfield_order right_to_left</code>&#8201;&#8212;&#8201;there is a comment in the file
+marking where.</p>
+</div>
+</td>
+</tr>
+</table>
+</div>
 </div>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_interpreting_results">4. Interpreting results</h2>
+<h2 id="_graphing_als_samples">2. Graphing ALS samples</h2>
 <div class="sectionbody">
 <div class="paragraph">
-<p>Each test prints one line:</p>
+<p>For a light-vs-time plot rather than a register snapshot, capture the
+triggered buffer with <strong>only</strong> the illuminance scan element enabled
+(timestamp off), so every record is a bare little-endian <code>u16</code> and the
+whole file is a clean stream of samples to plot:</p>
 </div>
 <div class="listingblock">
 <div class="content">
-<pre>[6/10] triggered-buffer             PASS
-[6/10] triggered-buffer             FAIL: median sample spacing 612 ms, expected ~200 ms</pre>
+<pre class="highlight"><code class="language-sh" data-lang="sh">cd /sys/bus/iio/devices/iio:device0
+echo 1 &gt; scan_elements/in_illuminance_en
+echo 0 &gt; scan_elements/in_timestamp_en      # pure u16 records -- no padding/timestamp
+echo envcombo-dev0 &gt; trigger/current_trigger
+echo 256 &gt; buffer/length
+echo 1 &gt; buffer/enable
+dd if=/dev/iio:device0 of=/tmp/als_lights.bin bs=2 count=256
+echo 0 &gt; buffer/enable</code></pre>
 </div>
 </div>
 <div class="paragraph">
-<p>The failure message always states the observed value and the expectation.
-The process exit code is <code>0</code> on full pass and <code>1</code> otherwise, so the harness
-can gate CI directly. Tests after a failed one still run (each test
-re-establishes what it needs), but a failure in <code>module-loading</code> makes most
-later tests fail for want of a device&#8201;&#8212;&#8201;read the first failure first.</p>
+<p>Send <code>als_lights.bin</code> to the host the same way as the register snapshot&#8201;&#8212;&#8201;start Step 1&#8217;s listener, then from the guest:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-sh" data-lang="sh">nc 10.0.2.2 7777 &lt; /tmp/als_lights.bin</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>Open it with <code>docs/imhex/envcombo-als-plot.hexpat</code>. Its
+<code>[[hex::visualize("line_plot", ...)]]</code>
+attribute draws light-vs-sample in ImHex&#8217;s visualizer pane&#8201;&#8212;&#8201;you&#8217;ll see
+the simulator&#8217;s sawtooth ramp.</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="images/imhex-plot-snapshot.png" alt="ImHex line_plot visualizer of the captured ALS samples" width="900">
+</div>
+<div class="title">Figure 2. ImHex <code>line_plot</code> of a captured ALS buffer&#8201;&#8212;&#8201;the simulator&#8217;s sawtooth ramp</div>
+</div>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_full_records_with_timestamps">3. Full records with timestamps</h2>
+<div class="sectionbody">
+<div class="paragraph">
+<p>To inspect samples together with their timestamps instead of plotting,
+keep the timestamp scan element enabled during the capture. Each record is
+then 16 bytes&#8201;&#8212;&#8201;a <code>u16</code> light value, 6 bytes of padding, then an <code>s64</code>
+nanosecond timestamp.</p>
+</div>
+<div class="paragraph">
+<p>Capture on the guest:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-sh" data-lang="sh">cd /sys/bus/iio/devices/iio:device0
+echo 1 &gt; scan_elements/in_illuminance_en
+echo 1 &gt; scan_elements/in_timestamp_en      # timestamp ON -&gt; 16-byte records
+echo envcombo-dev0 &gt; trigger/current_trigger
+echo 256 &gt; buffer/length
+echo 1 &gt; buffer/enable
+dd if=/dev/iio:device0 of=/tmp/als_records.bin bs=16 count=256
+echo 0 &gt; buffer/enable</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>Send it to the host. On the host (WSL2), start a one-shot listener:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-sh" data-lang="sh">nc -l 7777 &gt; /mnt/c/Users/&lt;windows-user&gt;/als_records.bin</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>Then from the guest:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-sh" data-lang="sh">nc 10.0.2.2 7777 &lt; /tmp/als_records.bin</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>Open <code>als_records.bin</code> in ImHex with <code>docs/imhex/envcombo-als-records.hexpat</code>.</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="images/imhex-records-snapshot.png" alt="ImHex Pattern Data view of the decoded ALS records" width="900">
+</div>
+<div class="title">Figure 3. ImHex decoding the 16-byte ALS records&#8201;&#8212;&#8201;<code>light</code>, padding, and the <code>s64</code> nanosecond timestamp per sample</div>
+</div>
+<div class="sect2">
+<h3 id="_reading_the_timestamp_nanoseconds_not_seconds">3.1. Reading the timestamp (nanoseconds, not seconds)</h3>
+<div class="paragraph">
+<p>The driver stamps each record with <code>iio_get_time_ns()</code>, i.e. <strong>nanoseconds</strong>
+on the IIO device&#8217;s selected clock (<code>current_timestamp_clock</code>, default
+<code>realtime</code>). A 2026 capture therefore looks like
+<code>1781325487328050992</code>&#8201;&#8212;&#8201;a ~1.78&#215;10<sup>18</sup> value. Divide by 1,000,000,000
+to get seconds since the Unix epoch:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre>1781325487328050992 ns / 1e9 = 1781325487 s  -&gt;  2026-06-13 04:38:07 UTC</pre>
+</div>
+</div>
+<div class="admonitionblock warning">
+<table>
+<tr>
+<td class="icon">
+<div class="title">Warning</div>
+</td>
+<td class="content">
+<div class="paragraph">
+<p>ImHex&#8217;s built-in <strong>Data Inspector</strong> <code>time32_t</code>/<code>time64_t</code> rows read the raw
+bytes as <code>time_t</code> (<strong>seconds</strong>), so a nanosecond value overflows and shows
+<strong>"Invalid"</strong>&#8201;&#8212;&#8201;this is a unit mismatch in the inspector, not a bad
+timestamp. <code>docs/imhex/envcombo-als-records.hexpat</code> instead converts
+ns &#8594; s and formats <code>timestamp_ns</code> as a real UTC date in the Pattern Data
+view, so rely on that rather than the inspector rows.</p>
+</div>
+</td>
+</tr>
+</table>
+</div>
 </div>
 </div>
 </div>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-13 07:56:17 +0300
+Last updated 2026-06-13 07:53:18 +0300
 </div>
 </div>
 </body>

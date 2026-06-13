@@ -19,7 +19,7 @@ provided device simulator and a Rust end-to-end test harness.
 
 | link:test-harness.html[2. Test Harness]
 | The Rust end-to-end test harness: test plan and block diagram of the
-  harness / driver / simulator stack, what each of the 9 tests asserts and
+  harness / driver / simulator stack, what each of the 10 tests asserts and
   how it can fail, and the cross-checking strategy against the simulator's
   debugfs register file.
 
@@ -29,6 +29,12 @@ provided device simulator and a Rust end-to-end test harness.
   from the shell (raw reads, gain/integration time, thresholds, events,
   triggered buffer), inspecting device registers, and running the test
   harness.
+
+| link:debugging.html[4. Manual Debugging & Binary Inspection]
+| Host-side decoding of the device's binary interfaces with ImHex and the
+  `docs/imhex/` pattern files: capturing and field-decoding the simulator
+  register file, plotting a captured ALS buffer, and reading full 16-byte
+  records (including how the nanosecond timestamp is laid out and read).
 |===
 
 == Quick orientation

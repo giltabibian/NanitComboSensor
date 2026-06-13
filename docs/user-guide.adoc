@@ -212,166 +212,10 @@ rmmod envcombo && modprobe envcombo
 dmesg | tail -1     # "factory calibration overrides ALS integration time to 100 ms..."
 ----
 
-== Inspecting Register State with ImHex
-
-The simulator exposes its full register file at
-`/sys/kernel/debug/envcombo-sim/regs` (19 bytes, one byte per register,
-16-bit fields big-endian). Capturing that blob and decoding it with the
-`docs/imhex/envcombo-als.hexpat` pattern gives a field-by-field view of the
-device state at a chosen moment.
-
-This walkthrough captures *one* snapshot after putting the device into a
-known state. ImHex runs on the Windows host; QEMU runs under WSL2, so the
-listener lives in WSL2 (where the guest's slirp gateway `10.0.2.2`
-resolves) and writes the file to a Windows-visible path.
-
-=== Step 1 -- Start a one-shot listener (WSL2)
-
-Accept a single connection and write it where Windows ImHex can open it:
-
-[source,sh]
-----
-nc -l 7777 > /mnt/c/Users/<windows-user>/regs.bin
-----
-
-=== Step 2 -- Set thresholds and power mode (guest)
-
-Drive the device through its real sysfs ABI, so the change goes through
-the I2C write path and lands in the actual registers:
-
-[source,sh]
-----
-cd /sys/bus/iio/devices/iio:device0     # adjust N if not device0
-
-# Thresholds -> ALS_TH_LOW (0x08-09) / ALS_TH_HIGH (0x0A-0B).
-# Keep the window well-formed: low <= high at every step.
-echo 100 > events/in_illuminance_thresh_falling_value
-echo 800 > events/in_illuminance_thresh_rising_value
-
-# Power mode is FSM-driven, not directly writable. Enabling a consumer
-# drives PWR_MODE (0x12) to CONTINUOUS (0x03); disabling all consumers
-# returns it to SLEEP (0x01).
-echo 1 > events/in_illuminance_thresh_either_en
-----
-
-=== Step 3 -- Dump and send the register file once
-
-[source,sh]
-----
-nc 10.0.2.2 7777 < /sys/kernel/debug/envcombo-sim/regs
-----
-
-The listener from Step 1 receives the 19 bytes and exits; `regs.bin` now
-holds the snapshot.
-
-=== Step 4 -- Decode in ImHex (Windows)
-
-Open `C:\Users\<windows-user>\regs.bin`, load `docs/imhex/envcombo-als.hexpat`, and run
-it. The Pattern Data view should now show, for this capture:
-
-* `pwr_mode = Continuous`
-* `als_th_low = 100`, `als_th_high = 800`
-* `cfg.als_en = 1`, plus the live `als_out` reading
-
-To capture a different state (e.g. the SLEEP baseline), disable the
-consumer (`echo 0 > events/in_illuminance_thresh_either_en`) and repeat
-from Step 1.
-
-.ImHex decoding a register snapshot via `docs/imhex/envcombo-als.hexpat` -- here the SLEEP baseline (`pwr_mode = Sleep`, a 100/800 threshold window)
-image::images/imhex-regs-snapshot.png[ImHex Pattern Data view of the envcombo register dump,900]
-
-[NOTE]
-====
-The debugfs `regs` file is the source of truth for these captures: the
-simulator reconstructs the threshold and ALS bytes from its internal
-state on every read, so the dump always reflects the device as the driver
-left it. Writing register bytes *into* debugfs is not equivalent to the
-sysfs path above and is not used here.
-====
-
-[NOTE]
-====
-`docs/imhex/envcombo-als.hexpat` uses typed enums inside bitfields and LSB-first
-bitfield order, which is correct on current ImHex. If your build renders
-the CFG fields reversed (e.g. `als_en` landing in the low bits), add
-`#pragma bitfield_order right_to_left` -- there is a comment in the file
-marking where.
-====
-
-=== Graphing ALS samples
-
-For a light-vs-time plot rather than a register snapshot, capture the
-triggered buffer with *only* the illuminance scan element enabled
-(timestamp off), so every record is a bare little-endian `u16` and the
-whole file is a clean stream of samples to plot:
-
-[source,sh]
-----
-cd /sys/bus/iio/devices/iio:device0
-echo 1 > scan_elements/in_illuminance_en
-echo 0 > scan_elements/in_timestamp_en      # pure u16 records -- no padding/timestamp
-echo envcombo-dev0 > trigger/current_trigger
-echo 256 > buffer/length
-echo 1 > buffer/enable
-dd if=/dev/iio:device0 of=/tmp/als_lights.bin bs=2 count=256
-echo 0 > buffer/enable
-----
-
-Send `als_lights.bin` to the host the same way as the register snapshot --
-start Step 1's listener, then from the guest:
-
-[source,sh]
-----
-nc 10.0.2.2 7777 < /tmp/als_lights.bin
-----
-
-Open it with `docs/imhex/envcombo-als-plot.hexpat`. Its
-`+[[hex::visualize("line_plot", ...)]]+`
-attribute draws light-vs-sample in ImHex's visualizer pane -- you'll see
-the simulator's sawtooth ramp.
-
-.ImHex `line_plot` of a captured ALS buffer -- the simulator's sawtooth ramp
-image::images/imhex-plot-snapshot.png[ImHex line_plot visualizer of the captured ALS samples,900]
-
-=== Full records with timestamps
-
-To inspect samples together with their timestamps instead of plotting,
-keep the timestamp scan element enabled during the capture. Each record is
-then 16 bytes -- a `u16` light value, 6 bytes of padding, then an `s64`
-nanosecond timestamp.
-
-Capture on the guest:
-
-[source,sh]
-----
-cd /sys/bus/iio/devices/iio:device0
-echo 1 > scan_elements/in_illuminance_en
-echo 1 > scan_elements/in_timestamp_en      # timestamp ON -> 16-byte records
-echo envcombo-dev0 > trigger/current_trigger
-echo 256 > buffer/length
-echo 1 > buffer/enable
-dd if=/dev/iio:device0 of=/tmp/als_records.bin bs=16 count=256
-echo 0 > buffer/enable
-----
-
-Send it to the host. On the host (WSL2), start a one-shot listener:
-
-[source,sh]
-----
-nc -l 7777 > /mnt/c/Users/<windows-user>/als_records.bin
-----
-
-Then from the guest:
-
-[source,sh]
-----
-nc 10.0.2.2 7777 < /tmp/als_records.bin
-----
-
-Open `als_records.bin` in ImHex with `docs/imhex/envcombo-als-records.hexpat`.
-
-.ImHex decoding the 16-byte ALS records -- `light`, padding, and the `s64` nanosecond timestamp per sample
-image::images/imhex-records-snapshot.png[ImHex Pattern Data view of the decoded ALS records,900]
+TIP: For field-by-field decoding of the register file and captured ALS
+buffers with ImHex (register snapshots, light-vs-time plots, and full
+records with timestamps), see link:debugging.html[Manual Debugging &
+Binary Inspection].
 
 == Run the test harness
 
@@ -388,20 +232,21 @@ echo $?             # 0 = all passed, 1 = at least one failure
 Expected output:
 
 ----
-envcombo driver test harness (9 tests, seed 4675903481288702464)
-[1/9] module-loading               PASS
-[2/9] direct-als-read              PASS
-[3/9] gain-and-integration-time    PASS
-[4/9] threshold-attributes         PASS
-[5/9] threshold-events             PASS
-[6/9] triggered-buffer             PASS
-[7/9] power-fsm-transitions        PASS
-[8/9] module-unloading             PASS
-[9/9] kernel-log-health            PASS
-RESULT: all 9 tests passed (seed 4675903481288702464)
+envcombo driver test harness (10 tests, seed 4675903481288702464)
+[1/10] module-loading               PASS
+[2/10] direct-als-read              PASS
+[3/10] gain-and-integration-time    PASS
+[4/10] threshold-attributes         PASS
+[5/10] threshold-events             PASS
+[6/10] triggered-buffer             PASS
+[7/10] buffer-timestamp-accuracy    PASS
+[8/10] power-fsm-transitions        PASS
+[9/10] module-unloading             PASS
+[10/10] kernel-log-health           PASS
+RESULT: all 10 tests passed (seed 4675903481288702464)
 ----
 
-The device tests (2--7) run in a random order each time, seeded from the
+The device tests (2--8) run in a random order each time, seeded from the
 clock, to prove they are order-independent; module-loading stays first and
 module-unloading / kernel-log-health stay last. The seed is printed so a
 failing order can be replayed deterministically:
