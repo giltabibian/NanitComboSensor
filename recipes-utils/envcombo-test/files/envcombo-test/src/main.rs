@@ -22,10 +22,18 @@ use std::time::{Duration, Instant};
 
 // Simulator register file layout (debugfs blob, one byte per register).
 const REG_CFG: usize = 0x06;
+const REG_INT_CFG: usize = 0x07;
 const REG_ALS_TH_LOW_MSB: usize = 0x08;
 const REG_ALS_TH_HIGH_MSB: usize = 0x0A;
+const REG_CAL_ALS_GAIN: usize = 0x10;
+const REG_CAL_ALS_TIME: usize = 0x11;
 const REG_PWR_MODE: usize = 0x12;
 const REG_COUNT: usize = 0x13;
+
+// CFG/INT_CFG bits the driver provisions at probe.
+const CFG_ALS_EN: u8 = 0x80;
+const INT_CFG_EN: u8 = 0x80;
+const INT_CFG_LATCH: u8 = 0x40;
 
 const PWR_MODE_MASK: u8 = 0x03;
 const PWR_SLEEP: u8 = 0x01;
@@ -113,9 +121,13 @@ fn main() {
         ("direct-als-read", test_direct_read),
         ("gain-and-integration-time", test_gain_and_time),
         ("gain-response", test_gain_response),
+        ("time-response", test_time_response),
+        ("factory-gain-cal", test_factory_gain_cal),
+        ("factory-atime-override", test_factory_atime_override),
         ("threshold-attributes", test_threshold_attrs),
         ("threshold-events", test_events),
         ("triggered-buffer", test_buffer),
+        ("buffer-no-timestamp", test_buffer_no_timestamp),
         ("buffer-timestamp-accuracy", test_timestamp),
         ("power-fsm-transitions", test_power_fsm),
         ("module-unloading", test_unload),
@@ -424,6 +436,44 @@ fn reload_modules() -> TestResult {
     Ok(())
 }
 
+/// Set one simulator register byte through the debugfs blob. Used to inject
+/// factory-calibration values (CAL_AGAIN/CAL_ATIME) that have no sysfs path.
+/// Read-modify-write of the whole 19-byte image so no seek is needed; the
+/// reconstructed ALS/threshold/STATUS bytes are ignored on the write side, so
+/// rewriting them is harmless.
+fn sim_write_reg(offset: usize, val: u8) -> TestResult {
+    use std::io::Write;
+    let mut regs = sim_regs()?;
+    regs[offset] = val;
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .open(DEBUGFS_REGS)
+        .map_err(|e| format!("open {} for write: {}", DEBUGFS_REGS, e))?;
+    f.write_all(&regs)
+        .map_err(|e| format!("write {} <- reg[{:#04x}]={:#04x}: {}", DEBUGFS_REGS, offset, val, e))
+}
+
+/// Reload only the driver (the simulator, and any debugfs register edits made
+/// to it, stay in place) so it re-probes and re-reads the factory-calibration
+/// registers, then re-discover the possibly-renumbered IIO device into `ctx`.
+fn reload_driver(ctx: &mut Ctx) -> TestResult {
+    if let Ok((dev, _)) = find_iio_device() {
+        let _ = sysfs_write(&dev.join("buffer/enable"), "0");
+        let _ = sysfs_write(&dev.join("trigger/current_trigger"), "\n");
+    }
+    if module_loaded(DRV_MODULE) {
+        run("rmmod", &[DRV_MODULE])?;
+        wait_device(false, Duration::from_secs(5))?;
+    }
+    run("modprobe", &[DRV_MODULE])?;
+    let (dev, chardev) =
+        wait_device(true, Duration::from_secs(5))?.expect("wait_device(present) returned device");
+    ctx.trigger = find_trigger()?;
+    ctx.dev = dev;
+    ctx.chardev = chardev;
+    Ok(())
+}
+
 /// Bring the device to a known baseline so each test is independent of the
 /// order tests run in and of any state earlier tests (or manual poking) left
 /// behind: consumers off, default gain/time, full-range (effectively
@@ -475,6 +525,23 @@ fn test_module_loading(ctx: &mut Ctx) -> TestResult {
 
     // Probe must leave the device idle in SLEEP.
     expect_power_mode(PWR_SLEEP, "after probe")?;
+
+    // Probe must also provision the device registers: interrupt enabled and
+    // latched, and CFG with ALS enabled at the default gain/time indices
+    // (gain x1 = idx 0, 200 ms = idx 2 -> 0x80 | (2 << 1) = 0x84).
+    let regs = sim_regs()?;
+    check!(
+        regs[REG_INT_CFG] == INT_CFG_EN | INT_CFG_LATCH,
+        "INT_CFG {:#04x} after probe, expected {:#04x}",
+        regs[REG_INT_CFG],
+        INT_CFG_EN | INT_CFG_LATCH
+    );
+    check!(
+        regs[REG_CFG] == CFG_ALS_EN | (2 << CFG_TIME_SHIFT),
+        "CFG {:#04x} after probe, expected {:#04x} (ALS on, gain x1, 200 ms)",
+        regs[REG_CFG],
+        CFG_ALS_EN | (2 << CFG_TIME_SHIFT)
+    );
     Ok(())
 }
 
@@ -529,6 +596,14 @@ fn test_gain_and_time(ctx: &mut Ctx) -> TestResult {
     );
     let scale = read_f64(&attr(ctx, "in_illuminance_scale"))?;
     check!((scale - 0.25).abs() < 1e-6, "scale {} != 0.25 at gain 4", scale);
+
+    // scale must be 1/gain for every supported gain (CAL_AGAIN defaults to 1).
+    for (g, expect) in [(1, 1.0), (4, 0.25), (16, 0.0625), (64, 0.015_625)] {
+        sysfs_write(&gain_attr, &g.to_string())?;
+        let s = read_f64(&attr(ctx, "in_illuminance_scale"))?;
+        check!((s - expect).abs() < 1e-9, "scale {} != {} at gain {}", s, expect, g);
+    }
+    sysfs_write(&gain_attr, "4")?; // restore for the rejected-write check below
 
     // Invalid gain must be rejected and leave state untouched.
     check!(
@@ -640,6 +715,141 @@ fn test_gain_response(ctx: &mut Ctx) -> TestResult {
     Ok(())
 }
 
+/// Functional integration-time check, the time analogue of test_gain_response.
+/// gain-and-integration-time proves the time *setting* lands in CFG; this
+/// proves it changes the measurement: the simulator divides the reading by
+/// time_ms/50, so a longer integration time yields a smaller raw value, and
+/// `raw * (time_ms / 50)` recovers the same underlying signal regardless of
+/// time. Degenerate ramp positions surface as a non-decreasing raw sequence
+/// and are retried, exactly as in the gain test.
+fn test_time_response(ctx: &mut Ctx) -> TestResult {
+    reset_baseline(ctx)?; // gain 1, integration time 200 ms
+    let time_attr = attr(ctx, "in_illuminance_integration_time");
+    let raw_attr = attr(ctx, "in_illuminance_raw");
+    // (sysfs value, divisor = time_ms / 50), ascending in time.
+    const TIMES: [(&str, u32); 4] = [("0.05", 1), ("0.1", 2), ("0.2", 4), ("0.4", 8)];
+
+    let sweep = || -> Result<Vec<(u32, u32, f64)>, String> {
+        let mut out = Vec::with_capacity(TIMES.len());
+        for (t, div) in TIMES {
+            sysfs_write(&time_attr, t)?;
+            let raw = read_u32(&raw_attr)?;
+            out.push((div, raw, raw as f64 * div as f64));
+        }
+        Ok(out)
+    };
+    // Longer time -> smaller reading, so raw must strictly decrease.
+    let decreasing = |d: &[(u32, u32, f64)]| d.windows(2).all(|w| w[1].1 < w[0].1);
+
+    let mut data = sweep()?;
+    for _ in 0..8 {
+        if decreasing(&data) {
+            break;
+        }
+        sleep(Duration::from_millis(100)); // climb the ramp clear of rounding ties
+        data = sweep()?;
+    }
+    check!(
+        decreasing(&data),
+        "raw did not decrease with integration time: {:?}",
+        data.iter().map(|&(div, r, _)| (div, r)).collect::<Vec<_>>()
+    );
+
+    // raw * (time/50) recovers the same signal. The slack is wider than the
+    // gain test's: the longest time divides by 8, so its rounding error is
+    // amplified by 8 when un-scaled.
+    let min = data.iter().map(|&(_, _, c)| c).fold(f64::INFINITY, f64::min);
+    let max = data.iter().map(|&(_, _, c)| c).fold(f64::NEG_INFINITY, f64::max);
+    check!(
+        max - min <= 8.0,
+        "time-compensated readings disagree by {:.2} (raw*div per time: {:?})",
+        max - min,
+        data.iter().map(|&(div, _, c)| (div, c)).collect::<Vec<_>>()
+    );
+
+    expect_power_mode(PWR_SLEEP, "after integration-time sweep reads")?;
+    Ok(())
+}
+
+/// Factory gain calibration (CAL_AGAIN). The effective gain -- and therefore
+/// the reported scale -- is the configured gain times CAL_AGAIN, but every
+/// other test runs with CAL_AGAIN = 1 so the multiply is never exercised.
+/// Inject a multiplier via debugfs, reload the driver so it re-reads the
+/// factory register at probe, and confirm scale folds it in. The override is
+/// always undone and the driver reloaded so the rest of the suite sees a
+/// normal device.
+fn test_factory_gain_cal(ctx: &mut Ctx) -> TestResult {
+    const MULT: u32 = 2;
+    sim_write_reg(REG_CAL_ALS_GAIN, MULT as u8)?;
+    let result = (|| -> TestResult {
+        reload_driver(ctx)?;
+        reset_baseline(ctx)?; // configured gain x1 -> effective gain = MULT
+        let scale_attr = attr(ctx, "in_illuminance_scale");
+
+        let scale = read_f64(&scale_attr)?;
+        check!(
+            (scale - 1.0 / MULT as f64).abs() < 1e-9,
+            "scale {} != {} with CAL_AGAIN={} at gain 1",
+            scale,
+            1.0 / MULT as f64,
+            MULT
+        );
+        // At configured gain 4 the effective gain is 4*MULT -> scale 1/(4*MULT).
+        sysfs_write(&attr(ctx, "in_illuminance_hardwaregain"), "4")?;
+        let scale = read_f64(&scale_attr)?;
+        check!(
+            (scale - 1.0 / (4 * MULT) as f64).abs() < 1e-9,
+            "scale {} != {} with CAL_AGAIN={} at gain 4",
+            scale,
+            1.0 / (4 * MULT) as f64,
+            MULT
+        );
+        Ok(())
+    })();
+    // Always restore, even if the body failed, so later tests are unaffected.
+    let restore = sim_write_reg(REG_CAL_ALS_GAIN, 1).and_then(|()| reload_driver(ctx));
+    result?;
+    restore
+}
+
+/// Factory integration-time override (CAL_ATIME). A non-zero CAL_ATIME at
+/// probe must fix the integration time to that value and make it read-only,
+/// with the available list collapsed to the single forced value. The whole
+/// branch is otherwise only exercised by hand, so inject it via debugfs,
+/// reload the driver, check the user-visible effects, then restore.
+fn test_factory_atime_override(ctx: &mut Ctx) -> TestResult {
+    sim_write_reg(REG_CAL_ALS_TIME, 100)?; // force 100 ms
+    let result = (|| -> TestResult {
+        reload_driver(ctx)?;
+        let time_attr = attr(ctx, "in_illuminance_integration_time");
+
+        check!(
+            (read_f64(&time_attr)? - 0.1).abs() < 1e-6,
+            "integration_time {:?} not forced to 0.1 by CAL_ATIME",
+            sysfs_read(&time_attr)?
+        );
+        let avail = sysfs_read(&attr(ctx, "in_illuminance_integration_time_available"))?;
+        check!(
+            avail == "0.100000",
+            "integration_time_available {:?}, expected only the forced 0.100000",
+            avail
+        );
+        // Read-only: a write must be refused and leave the value unchanged.
+        check!(
+            sysfs_write(&time_attr, "0.2").is_err(),
+            "integration_time write accepted despite factory override"
+        );
+        check!(
+            (read_f64(&time_attr)? - 0.1).abs() < 1e-6,
+            "integration_time changed by a write that should have been refused"
+        );
+        Ok(())
+    })();
+    let restore = sim_write_reg(REG_CAL_ALS_TIME, 0).and_then(|()| reload_driver(ctx));
+    result?;
+    restore
+}
+
 fn test_threshold_attrs(ctx: &mut Ctx) -> TestResult {
     reset_baseline(ctx)?;
     let rising = attr(ctx, "events/in_illuminance_thresh_rising_value");
@@ -680,6 +890,19 @@ fn test_threshold_attrs(ctx: &mut Ctx) -> TestResult {
         sim_reg16(&regs, REG_ALS_TH_LOW_MSB) == 50
             && sim_reg16(&regs, REG_ALS_TH_HIGH_MSB) == 200,
         "device thresholds changed by rejected writes"
+    );
+
+    // The boundary case low == high is a valid (degenerate) window and must
+    // be accepted: equality is allowed, only a strict inversion is rejected.
+    sysfs_write(&falling, "100")?;
+    sysfs_write(&rising, "100")?;
+    check!(read_u32(&falling)? == 100, "falling readback != 100 (low == high)");
+    check!(read_u32(&rising)? == 100, "rising readback != 100 (low == high)");
+    let regs = sim_regs()?;
+    check!(
+        sim_reg16(&regs, REG_ALS_TH_LOW_MSB) == 100
+            && sim_reg16(&regs, REG_ALS_TH_HIGH_MSB) == 100,
+        "device thresholds not set to the degenerate low == high window"
     );
     Ok(())
 }
@@ -847,6 +1070,83 @@ fn test_events(ctx: &mut Ctx) -> TestResult {
     teardown?;
     check!(read_u32(&enable)? == 0, "enable readback != 0");
     expect_power_mode(PWR_SLEEP, "after disabling events")?;
+    Ok(())
+}
+
+/// Triggered buffer with the timestamp scan element *disabled*. test_buffer
+/// always captures 16-byte timestamped records; this proves the other layout
+/// the driver must support -- bare 2-byte little-endian light samples, which
+/// is what the ImHex line_plot capture in the docs relies on. If the driver
+/// wrongly kept emitting the 16-byte record, the s64 timestamp bytes would
+/// read back as wildly out-of-range u16 values, so the in-range check below
+/// is what actually pins the record size.
+fn test_buffer_no_timestamp(ctx: &mut Ctx) -> TestResult {
+    reset_baseline(ctx)?;
+    let scan_en = attr(ctx, "scan_elements/in_illuminance_en");
+    let ts_en = attr(ctx, "scan_elements/in_timestamp_en");
+    let buf_en = attr(ctx, "buffer/enable");
+
+    sysfs_write(&scan_en, "1")?;
+    sysfs_write(&ts_en, "0")?; // timestamp OFF -> pure u16 records
+    sysfs_write(&attr(ctx, "trigger/current_trigger"), &ctx.trigger)?;
+    sysfs_write(&attr(ctx, "buffer/length"), "64")?;
+    sysfs_write(&buf_en, "1")?;
+
+    let result = (|| -> TestResult {
+        expect_power_mode(PWR_CONTINUOUS, "with buffer enabled")?;
+
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&ctx.chardev)
+            .map_err(|e| format!("open {}: {}", ctx.chardev.display(), e))?;
+        let mut data = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while data.len() < 8 * 2 && Instant::now() < deadline {
+            let mut chunk = [0u8; 256];
+            if let Some(n) = poll_read_nonblock(file.as_raw_fd(), &mut chunk, 1000)? {
+                data.extend_from_slice(&chunk[..n]);
+            }
+        }
+        check!(
+            data.len() >= 8 * 2,
+            "only {} bytes in 8 s, expected >= 16 (8 u16 samples)",
+            data.len()
+        );
+        check!(
+            data.len() % 2 == 0,
+            "odd byte count {} -- not whole 2-byte records",
+            data.len()
+        );
+
+        let samples: Vec<u16> = data
+            .chunks_exact(2)
+            .map(|s| u16::from_le_bytes([s[0], s[1]]))
+            .collect();
+        for &light in &samples {
+            check!(
+                light <= MAX_RAW_DEFAULT_CFG,
+                "buffered u16 sample {} out of range (16-byte records leaking in?)",
+                light
+            );
+        }
+        check!(
+            samples.iter().any(|&v| v != samples[0]),
+            "all buffered samples identical; conversions not running"
+        );
+        Ok(())
+    })();
+
+    let mut teardown = String::new();
+    for (path, val) in [(&buf_en, "0"), (&scan_en, "0")] {
+        if let Err(e) = sysfs_write(path, val) {
+            let _ = write!(teardown, "; teardown: {}", e);
+        }
+    }
+    result.map_err(|e| e + &teardown)?;
+    check!(teardown.is_empty(), "buffer teardown failed{}", teardown);
+    expect_power_mode(PWR_SLEEP, "after disabling buffer")?;
     Ok(())
 }
 

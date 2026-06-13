@@ -43,7 +43,7 @@ caught a trigger refcount double-put on `rmmod` and an
 
 == Test plan
 
-The 11 tests run one at a time (never concurrently); the exit code is 0 only
+The 15 tests run one at a time (never concurrently); the exit code is 0 only
 if every test passes.
 
 The *order*, though, is deliberately randomized rather than fixed:
@@ -66,7 +66,8 @@ which the tests are listed, not the order they run in.
 | Both modules present (`modprobe` fallback if not autoloaded); debugfs
   reachable; an IIO device named `envcombo` with chardev and
   `envcombo-dev*` trigger appears within 5 s; device idle in SLEEP after
-  probe.
+  probe; probe also provisioned the registers -- INT_CFG = enabled+latched
+  (0xC0) and CFG = ALS-on at the default gain/time (0x84).
 
 | 2 | `direct-als-read`
 | Three one-shot reads via `in_illuminance_raw`, 600 ms apart: each value
@@ -76,10 +77,10 @@ which the tests are listed, not the order they run in.
 
 | 3 | `gain-and-integration-time`
 | `_available` lists exactly the datasheet values; a valid gain write is
-  visible in sysfs readback *and* the CFG register *and* the reported scale
-  (0.25 at gain 4); a valid time write lands in CFG; unsupported values
-  (gain 3, time 0.075 s) are rejected with state untouched; defaults
-  restored.
+  visible in sysfs readback *and* the CFG register *and* the reported scale;
+  scale is checked to be 1/gain for all four gains; a valid time write lands
+  in CFG; unsupported values (gain 3, time 0.075 s) are rejected with state
+  untouched; defaults restored.
 
 | 4 | `gain-response`
 | The *functional* counterpart to `gain-and-integration-time`: sweeps all
@@ -89,12 +90,33 @@ which the tests are listed, not the order they run in.
   reported scale actually undoes the gain. Degenerate ramp positions (signal
   at zero or wrapping mid-sweep) are retried so only a real fault fails.
 
-| 5 | `threshold-attributes`
+| 5 | `time-response`
+| The integration-time analogue of `gain-response`: the simulator divides the
+  reading by `time_ms / 50`, so sweeping the four integration times must make
+  raw strictly *decrease*, while `raw \* (time / 50)` stays constant -- proving
+  the time setting changes the measurement and not just the CFG bits. Same
+  retry-on-degenerate-ramp handling as the gain sweep.
+
+| 6 | `factory-gain-cal`
+| Injects a `CAL_AGAIN` factory gain multiplier via debugfs and reloads the
+  driver so it re-reads the register at probe; the reported scale must fold in
+  the multiplier (effective gain = configured gain x CAL_AGAIN) at gains 1 and
+  4. The override is always undone and the driver reloaded afterwards.
+
+| 7 | `factory-atime-override`
+| Injects a non-zero `CAL_ATIME` via debugfs and reloads the driver: the
+  integration time must be forced to the factory value, the `_available` list
+  collapsed to that single value, and `integration_time` made read-only (a
+  write is refused and changes nothing). Always restored afterwards. Exercises
+  the factory-override branch that is otherwise only triggered by hand.
+
+| 8 | `threshold-attributes`
 | Threshold writes land in the big-endian TH_LOW/TH_HIGH register pairs;
   inverted-window, > 16-bit, and negative writes are rejected; registers
-  unchanged after the rejected writes.
+  unchanged after the rejected writes; the boundary case low == high (a
+  degenerate window) is accepted and lands in the registers.
 
-| 6 | `threshold-events`
+| 9 | `threshold-events`
 | Event fd obtained via `IIO_GET_EVENT_FD_IOCTL`. With a tight [0, 5]
   window, an above-window crossing delivers an event whose 64-bit id is
   exactly light / thresh / EITHER with a positive timestamp; the window is
@@ -103,14 +125,21 @@ which the tests are listed, not the order they run in.
   window, *no* event may arrive (spurious-event check); power mode is
   CONTINUOUS while enabled and SLEEP after disable.
 
-| 7 | `triggered-buffer`
+| 10 | `triggered-buffer`
 | Scan element type is `le:u16/16>>0`; with the driver's own trigger and
   the buffer enabled: PWR_MODE is CONTINUOUS, direct reads still work,
   >= 8 samples arrive within 8 s, every sample is in range, timestamps are
   strictly monotonic with a median spacing of ~200 ms (the interrupt
   cadence), and teardown returns the device to SLEEP.
 
-| 8 | `buffer-timestamp-accuracy`
+| 11 | `buffer-no-timestamp`
+| The other scan layout: with the timestamp scan element *disabled*, records
+  must be bare 2-byte little-endian light samples (the layout the docs'
+  ImHex line_plot relies on). An even byte count and every u16 in range pin
+  the record size -- a leaked 16-byte timestamped record would read back as
+  wildly out-of-range values.
+
+| 12 | `buffer-timestamp-accuracy`
 | The *absolute* timestamp, complementing the spacing check in
   `triggered-buffer`: the device's `current_timestamp_clock` is mapped to the
   matching POSIX clock, the buffer read is bracketed with `clock_gettime()`
@@ -118,19 +147,19 @@ which the tests are listed, not the order they run in.
   inside that wall-clock window -- catching a wrong clock source, a
   stuck/zero stamp, or a constant offset a delta-only check cannot see.
 
-| 9 | `power-fsm-transitions`
+| 13 | `power-fsm-transitions`
 | The multi-consumer FSM cases: events+buffer both active; a raw read while
   active stays in CONTINUOUS (no ONE-SHOT detour); disabling events while
   the buffer runs keeps CONTINUOUS *and* the buffer still delivers a fresh
   sample (backlog drained first); the mirror case (buffer off, events on);
   last consumer off -> SLEEP and the one-shot path works again.
 
-| 10 | `module-unloading`
+| 14 | `module-unloading`
 | `rmmod` of driver then simulator succeeds; the IIO device and the
   simulator's debugfs entry disappear; both modules then reload cleanly and
   the device re-probes into SLEEP.
 
-| 11 | `kernel-log-health`
+| 15 | `kernel-log-health`
 | `dmesg` contains no WARN/BUG/Oops/refcount/call-trace diagnostics from
   the entire run, including the unload/reload cycle.
 |===
@@ -156,8 +185,8 @@ I/O paths are written defensively:
 Each test prints one line:
 
 ----
-[7/11] triggered-buffer             PASS
-[7/11] triggered-buffer             FAIL: median sample spacing 612 ms, expected ~200 ms
+[10/15] triggered-buffer            PASS
+[10/15] triggered-buffer            FAIL: median sample spacing 612 ms, expected ~200 ms
 ----
 
 The failure message always states the observed value and the expectation.

@@ -19,7 +19,7 @@ provided device simulator and a Rust end-to-end test harness.
 
 | link:test-harness.html[2. Test Harness]
 | The Rust end-to-end test harness: test plan and block diagram of the
-  harness / driver / simulator stack, what each of the 11 tests asserts and
+  harness / driver / simulator stack, what each of the 15 tests asserts and
   how it can fail, and the cross-checking strategy against the simulator's
   debugfs register file.
 
