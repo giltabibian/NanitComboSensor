@@ -1172,6 +1172,14 @@ fn test_buffer(ctx: &mut Ctx) -> TestResult {
     let result = (|| -> TestResult {
         expect_power_mode(PWR_CONTINUOUS, "with buffer enabled")?;
 
+        // A direct read in continuous mode returns the most recent *latched*
+        // conversion, and a freshly-enabled buffer can still hold a sample
+        // latched under the previous test's gain/time (the simulator keeps the
+        // last value until the next conversion). Wait for one fresh conversion
+        // at the reset baseline before the range check so it judges current
+        // data, not stale carry-over.
+        expect_buffer_alive(ctx, Duration::from_secs(3))?;
+
         // Direct reads must keep working alongside the buffer.
         let v = read_u32(&attr(ctx, "in_illuminance_raw"))?;
         check!(
