@@ -849,9 +849,13 @@ fn test_factory_atime_override(ctx: &mut Ctx) -> TestResult {
         );
         Ok(())
     })();
-    let restore = sim_write_reg(REG_CAL_ALS_TIME, 0).and_then(|()| reload_driver(ctx));
-    result?;
-    restore
+    let restore_res = sim_write_reg(REG_CAL_ALS_TIME, 0).and_then(|()| reload_driver(ctx));
+    match (result, restore_res) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(e), Ok(())) => Err(e),
+        (Ok(()), Err(r)) => Err(format!("restore failed: {}", r)),
+        (Err(e), Err(r)) => Err(format!("{}; restore failed: {}", e, r)),
+    }
 }
 
 fn test_threshold_attrs(ctx: &mut Ctx) -> TestResult {
