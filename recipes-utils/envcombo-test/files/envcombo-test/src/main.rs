@@ -115,6 +115,7 @@ fn main() {
         ("threshold-attributes", test_threshold_attrs),
         ("threshold-events", test_events),
         ("triggered-buffer", test_buffer),
+        ("buffer-timestamp-accuracy", test_timestamp),
         ("power-fsm-transitions", test_power_fsm),
         ("module-unloading", test_unload),
         ("kernel-log-health", test_kernel_log),
@@ -306,6 +307,46 @@ fn poll_read_nonblock(
             _ => return Err(format!("read: {}", err)),
         }
     }
+}
+
+/// Read a POSIX clock as nanoseconds, matching the i64 ns units the IIO
+/// core stamps buffered samples with.
+fn clock_now_ns(clk: libc::clockid_t) -> Result<i64, String> {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let ret = unsafe { libc::clock_gettime(clk, &mut ts) };
+    check!(
+        ret == 0,
+        "clock_gettime({}): {}",
+        clk,
+        std::io::Error::last_os_error()
+    );
+    Ok(ts.tv_sec as i64 * 1_000_000_000 + ts.tv_nsec as i64)
+}
+
+/// The clock the IIO core uses to stamp this device's samples, so the test
+/// can compare timestamps against the *same* reference the driver does.
+/// Defaults to realtime (the IIO core default) when the attribute is absent.
+fn iio_timestamp_clock(ctx: &Ctx) -> Result<(libc::clockid_t, String), String> {
+    let path = attr(ctx, "current_timestamp_clock");
+    let name = if path.exists() {
+        sysfs_read(&path)?
+    } else {
+        "realtime".to_string()
+    };
+    let id = match name.as_str() {
+        "realtime" => libc::CLOCK_REALTIME,
+        "realtime_coarse" => libc::CLOCK_REALTIME_COARSE,
+        "monotonic" => libc::CLOCK_MONOTONIC,
+        "monotonic_raw" => libc::CLOCK_MONOTONIC_RAW,
+        "monotonic_coarse" => libc::CLOCK_MONOTONIC_COARSE,
+        "boottime" => libc::CLOCK_BOOTTIME,
+        "tai" => libc::CLOCK_TAI,
+        other => return Err(format!("unknown timestamp clock {:?}", other)),
+    };
+    Ok((id, name))
 }
 
 fn find_iio_device() -> Result<(PathBuf, PathBuf), String> {
@@ -835,6 +876,89 @@ fn test_buffer(ctx: &mut Ctx) -> TestResult {
     result.map_err(|e| e + &teardown)?;
     check!(teardown.is_empty(), "buffer teardown failed{}", teardown);
 
+    expect_power_mode(PWR_SLEEP, "after disabling buffer")?;
+    Ok(())
+}
+
+/// Validate the *absolute* accuracy of buffered-sample timestamps, not just
+/// their spacing. test_buffer already proves monotonicity and the ~200 ms
+/// cadence, but a delta-only check passes even if the driver stamps on the
+/// wrong clock, emits a constant/zero timestamp, or carries a fixed offset.
+/// Here we bracket the read with clock_gettime() on the very clock the IIO
+/// core advertises for this device and require every fresh sample's stamp to
+/// fall inside that wall-clock window.
+fn test_timestamp(ctx: &mut Ctx) -> TestResult {
+    reset_baseline(ctx)?;
+    let (clk, clk_name) = iio_timestamp_clock(ctx)?;
+
+    set_buffer(ctx, true)?;
+    let result = (|| -> TestResult {
+        expect_power_mode(PWR_CONTINUOUS, "with buffer enabled")?;
+
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&ctx.chardev)
+            .map_err(|e| format!("open {}: {}", ctx.chardev.display(), e))?;
+
+        // Drain the backlog so every sample we judge below was stamped after
+        // we start watching the clock.
+        loop {
+            let mut chunk = [0u8; 256];
+            match poll_read_nonblock(file.as_raw_fd(), &mut chunk, 0)? {
+                Some(n) if n > 0 => continue,
+                _ => break,
+            }
+        }
+
+        // Bracket fresh samples with the device's own clock.
+        let before = clock_now_ns(clk)?;
+        let mut data = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while data.len() < 4 * 16 && Instant::now() < deadline {
+            let mut chunk = [0u8; 256];
+            if let Some(n) = poll_read_nonblock(file.as_raw_fd(), &mut chunk, 1000)? {
+                data.extend_from_slice(&chunk[..n]);
+            }
+        }
+        let after = clock_now_ns(clk)?;
+        check!(
+            data.len() >= 16,
+            "no buffered sample within 4 s (clock {})",
+            clk_name
+        );
+
+        // Low slack: a sample could have been latched in the gap between the
+        // drain and `before`, so allow one conversion period there. High
+        // slack: a stamp is taken before read() returns, so `after` already
+        // bounds it; a small margin only absorbs clock-read scheduling slop.
+        let lo = before - CONV_PERIOD.as_nanos() as i64 - 50_000_000;
+        let hi = after + 50_000_000;
+        for sample in data.chunks_exact(16) {
+            let ts = i64::from_le_bytes(sample[8..16].try_into().unwrap());
+            check!(ts != 0, "zero timestamp on clock {}", clk_name);
+            let off_ms = if ts < lo {
+                (lo - ts) / 1_000_000
+            } else {
+                (ts - hi) / 1_000_000
+            };
+            check!(
+                (lo..=hi).contains(&ts),
+                "timestamp {} outside read window [{}, {}] on clock {} (off by {} ms)",
+                ts,
+                lo,
+                hi,
+                clk_name,
+                off_ms
+            );
+        }
+        Ok(())
+    })();
+
+    let teardown = set_buffer(ctx, false);
+    result?;
+    teardown?;
     expect_power_mode(PWR_SLEEP, "after disabling buffer")?;
     Ok(())
 }
