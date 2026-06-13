@@ -807,9 +807,13 @@ fn test_factory_gain_cal(ctx: &mut Ctx) -> TestResult {
         Ok(())
     })();
     // Always restore, even if the body failed, so later tests are unaffected.
-    let restore = sim_write_reg(REG_CAL_ALS_GAIN, 1).and_then(|()| reload_driver(ctx));
-    result?;
-    restore
+    let restore_res = sim_write_reg(REG_CAL_ALS_GAIN, 1).and_then(|()| reload_driver(ctx));
+    match (result, restore_res) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(e), Ok(())) => Err(e),
+        (Ok(()), Err(r)) => Err(format!("restore failed: {}", r)),
+        (Err(e), Err(r)) => Err(format!("{}; restore failed: {}", e, r)),
+    }
 }
 
 /// Factory integration-time override (CAL_ATIME). A non-zero CAL_ATIME at
