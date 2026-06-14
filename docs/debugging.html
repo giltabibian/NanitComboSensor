@@ -459,9 +459,10 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </li>
 <li><a href="#_smbus_transaction_waveforms">4. SMBus transaction waveforms</a>
 <ul class="sectlevel2">
-<li><a href="#_byte_write_and_byte_read">4.1. Byte write and byte read</a></li>
-<li><a href="#_16_bit_word_accessand_why_swapped">4.2. 16-bit (word) access&#8201;&#8212;&#8201;and why "swapped"</a></li>
-<li><a href="#_overall_a_full_lifecycle">4.3. Overall: a full lifecycle</a></li>
+<li><a href="#_how_the_driver_uses_i2c">4.1. How the driver uses I2C</a></li>
+<li><a href="#_byte_write_and_byte_read">4.2. Byte write and byte read</a></li>
+<li><a href="#_16_bit_word_accessand_why_swapped">4.3. 16-bit (word) access&#8201;&#8212;&#8201;and why "swapped"</a></li>
+<li><a href="#_overall_a_full_lifecycle">4.4. Overall: a full lifecycle</a></li>
 </ul>
 </li>
 </ul>
@@ -780,7 +781,48 @@ phase.</p>
 </table>
 </div>
 <div class="sect2">
-<h3 id="_byte_write_and_byte_read">4.1. Byte write and byte read</h3>
+<h3 id="_how_the_driver_uses_i2c">4.1. How the driver uses I2C</h3>
+<div class="paragraph">
+<p>The SoC&#8217;s I2C controller is the bus <strong>master</strong>; the ENV-COMBO is the <strong>slave</strong> at
+address <strong>0x39</strong>. The driver never names that address&#8201;&#8212;&#8201;at probe it is handed a
+<code>struct i2c_client</code> whose <code>addr</code> is already set at the device end, and binds by
+<strong>name</strong> (<code>"envcombo"</code>), so it would work unchanged at a different address.</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="diagrams/svg/i2c-master-slave.svg" alt="I2C master/slave topology" width="650">
+</div>
+</div>
+<div class="paragraph">
+<p>Register access goes through four SMBus helpers over <code>i2c_smbus_*</code> calls:
+<code>read_reg</code> / <code>write_reg</code> (8-bit, <code>*_byte_data</code>) and <code>read_reg16</code> /
+<code>write_reg16</code> (16-bit big-endian fields like ALS_OUT and the thresholds, via
+the <code>*_word_swapped</code> variants&#8201;&#8212;&#8201;both bytes in one transaction so the device
+can&#8217;t latch a new sample mid-pair). With only 19 registers the driver skips a
+regmap; probe gates on <code>i2c_check_functionality(SMBUS_BYTE_DATA |
+SMBUS_WORD_DATA)</code>.</p>
+</div>
+<div class="paragraph">
+<p>The address stays the 7-bit value <strong>0x39</strong> everywhere in software; the
+controller shifts it up by one only when framing the transaction, since the
+wire&#8217;s first byte packs the address into bits [7:1] and the R/W direction into
+bit 0:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre>0x39 &lt;&lt; 1       = 0x72   -&gt; bit0 = 0  (WRITE)
+(0x39 &lt;&lt; 1) | 1 = 0x73   -&gt; bit0 = 1  (READ)</pre>
+</div>
+</div>
+<div class="paragraph">
+<p>That direction bit is <strong>why a register read needs a repeated START</strong>: the master
+first writes the register index (<code>0x72</code>), then re-sends the address with the
+read bit set (<code>0x73</code>) to turn the bus around&#8201;&#8212;&#8201;the <code>Sr &#8594; ADDR 0x73 &#174;</code> step
+in the read waveforms below.</p>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_byte_write_and_byte_read">4.2. Byte write and byte read</h3>
 <div class="paragraph">
 <p>A single-register write puts the register index (the SMBus <strong>command</strong> byte)
 and one data byte after the write address, then stops. This is the path
@@ -806,7 +848,7 @@ at probe returning 0xEB.</p>
 </div>
 </div>
 <div class="sect2">
-<h3 id="_16_bit_word_accessand_why_swapped">4.2. 16-bit (word) access&#8201;&#8212;&#8201;and why "swapped"</h3>
+<h3 id="_16_bit_word_accessand_why_swapped">4.3. 16-bit (word) access&#8201;&#8212;&#8201;and why "swapped"</h3>
 <div class="paragraph">
 <p>The ALS reading and both threshold registers are 16-bit fields the device
 stores <strong>big-endian</strong> (MSB at the lower address). The driver therefore uses
@@ -835,7 +877,7 @@ end the transfer. This is <code>envcombo_read_reg16</code> reading ALS_OUT (0x04
 </div>
 </div>
 <div class="sect2">
-<h3 id="_overall_a_full_lifecycle">4.3. Overall: a full lifecycle</h3>
+<h3 id="_overall_a_full_lifecycle">4.4. Overall: a full lifecycle</h3>
 <div class="paragraph">
 <p>Zoomed out to one segment per transaction, the same primitives compose into
 the driver&#8217;s real traffic: probe provisions the registers (identity check,
@@ -861,7 +903,7 @@ conversion, after which the device auto-returns to SLEEP.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-14 11:28:20 +0300
+Last updated 2026-06-14 11:41:40 +0300
 </div>
 </div>
 </body>

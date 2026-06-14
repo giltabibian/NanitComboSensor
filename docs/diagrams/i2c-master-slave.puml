@@ -1,0 +1,29 @@
+@startuml i2c-master-slave
+' I2C master/slave topology: the SoC's I2C controller (master) drives SCL
+' and shares SDA with the ENV-COMBO device (slave) at address 0x39.
+title I2C bus -- one master, one slave at 0x39
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam componentStyle rectangle
+skinparam rectangle {
+  BackgroundColor #FDFDFD
+  BorderColor #444444
+}
+
+rectangle "**SoC**" as SOC {
+  rectangle "envcombo driver\n(in kernel)" as DRV
+  rectangle "I2C controller\n(bus master)" as MASTER
+}
+
+rectangle "**ENV-COMBO**\n(bus slave, addr 0x39)\n19 byte-wide registers" as SLAVE
+
+DRV -down-> MASTER : i2c_smbus_* (client->addr = 0x39)
+MASTER -right-> SLAVE : SCL  (clock, master-driven)
+MASTER <-right-> SLAVE : SDA  (data, shared)
+
+note bottom of SLAVE
+  Master always drives SCL and starts every transfer;
+  on SDA the master sends address + R/W bit, the slave ACKs
+  and returns read data. Pull-ups idle both lines high.
+end note
+@enduml

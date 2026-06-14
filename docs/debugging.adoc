@@ -222,6 +222,38 @@ which side -- *Master* (driver) or *Slave* (device) -- owns `SDA` in each
 phase.
 ====
 
+=== How the driver uses I2C
+
+The SoC's I2C controller is the bus *master*; the ENV-COMBO is the *slave* at
+address *0x39*. The driver never names that address -- at probe it is handed a
+`struct i2c_client` whose `addr` is already set at the device end, and binds by
+*name* (`"envcombo"`), so it would work unchanged at a different address.
+
+image::diagrams/svg/i2c-master-slave.svg[I2C master/slave topology,650]
+
+Register access goes through four SMBus helpers over `i2c_smbus_*` calls:
+`read_reg` / `write_reg` (8-bit, `*_byte_data`) and `read_reg16` /
+`write_reg16` (16-bit big-endian fields like ALS_OUT and the thresholds, via
+the `*_word_swapped` variants -- both bytes in one transaction so the device
+can't latch a new sample mid-pair). With only 19 registers the driver skips a
+regmap; probe gates on `i2c_check_functionality(SMBUS_BYTE_DATA |
+SMBUS_WORD_DATA)`.
+
+The address stays the 7-bit value *0x39* everywhere in software; the
+controller shifts it up by one only when framing the transaction, since the
+wire's first byte packs the address into bits [7:1] and the R/W direction into
+bit 0:
+
+----
+0x39 << 1       = 0x72   -> bit0 = 0  (WRITE)
+(0x39 << 1) | 1 = 0x73   -> bit0 = 1  (READ)
+----
+
+That direction bit is *why a register read needs a repeated START*: the master
+first writes the register index (`0x72`), then re-sends the address with the
+read bit set (`0x73`) to turn the bus around -- the `Sr -> ADDR 0x73 (R)` step
+in the read waveforms below.
+
 === Byte write and byte read
 
 A single-register write puts the register index (the SMBus *command* byte)
