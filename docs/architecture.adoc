@@ -2,7 +2,9 @@
 :toc:
 :toclevels: 2
 :sectnums:
+:docinfo: shared
 
+[.back-to-index]
 link:index.html[<- Back to documentation index]
 
 This document describes the architecture of the `envcombo` Linux IIO driver
@@ -176,9 +178,9 @@ image::diagrams/svg/buffer-flow-seq.svg[Triggered buffer capture sequence]
 | `in_illuminance_raw` | ALS_OUT | On-demand read; one-shot conversion when idle, latched value when CONTINUOUS
 | `in_illuminance_scale` | CFG gain + CALIB_ALS_GAIN | `1 / (gain x calib_gain)`, `IIO_VAL_FRACTIONAL`; illustrative 1.0 lux/count @ gain 1
 | `in_illuminance_hardwaregain` (+`_available`) | CFG[4:3] | One of `1 4 16 64`; invalid writes -> `-EINVAL`
-| `in_illuminance_integration_time` (+`_available`) | CFG[2:1] | One of `0.05 0.1 0.2 0.4` s; when the CALIB_ALS_TIME override is set, writes return `-EOPNOTSUPP` and `_available` lists only the calibrated time
-| `events/in_illuminance_thresh_rising_value` | ALS_TH_HIGH | 0..65535; must stay >= falling value
-| `events/in_illuminance_thresh_falling_value` | ALS_TH_LOW | 0..65535; must stay \<= rising value
+| `in_illuminance_integration_time` (+`_available`) | CFG[2:1] | One of `0.05 0.1 0.2 0.4` *seconds* (`IIO_VAL_INT_PLUS_MICRO`); when the CALIB_ALS_TIME override is set, writes return `-EOPNOTSUPP` and `_available` lists only the calibrated time
+| `events/in_illuminance_thresh_rising_value` | ALS_TH_HIGH | Raw ALS counts (`0..65535`, same unit as `in_illuminance_raw`); must stay >= falling value
+| `events/in_illuminance_thresh_falling_value` | ALS_TH_LOW | Raw ALS counts (`0..65535`); must stay \<= rising value
 | `events/in_illuminance_thresh_either_en` | power FSM | Enables the (direction-less) crossing event and CONTINUOUS mode
 | `buffer/`, `scan_elements/`, `trigger/` | -- | Standard IIO triggered-buffer interface; scan: u16 light @ index 0 + s64 timestamp
 | `/dev/iio:deviceN` | -- | Buffered scan records + `IIO_GET_EVENT_FD_IOCTL` event stream

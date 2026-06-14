@@ -1,0 +1,26 @@
+<style>
+/* Pin the "Back to documentation index" link to the upper-left corner so it
+   stays at the top of every page regardless of how long the table of contents
+   is. Falls back to a normal inline block only on small screens, where a
+   fixed element would overlap the title. */
+.back-to-index {
+  position: fixed;
+  top: 0.6rem;
+  left: 0.8rem;
+  z-index: 1000;
+  margin: 0;
+  font-size: 0.9em;
+}
+.back-to-index a {
+  background: rgba(255, 255, 255, 0.85);
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.25rem;
+}
+@media screen and (max-width: 992px) {
+  .back-to-index {
+    position: static;
+    margin-bottom: 1rem;
+  }
+  .back-to-index a { background: none; padding: 0; }
+}
+</style>

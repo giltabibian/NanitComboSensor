@@ -3,3 +3,7 @@ target/
 
 # ImHex / debugfs capture artifacts (see docs/debugging.adoc)
 *.bin
+
+# Local IDE config: c_cpp_properties.json holds absolute paths to this
+# machine's Yocto kernel build, so it is personal, not shared.
+.vscode/

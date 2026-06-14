@@ -436,6 +436,32 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 #footer-text{color:rgba(0,0,0,.6);font-size:.9em}}
 @media amzn-kf8{#header,#content,#footnotes,#footer{padding:0}}
 </style>
+<style>
+/* Pin the "Back to documentation index" link to the upper-left corner so it
+   stays at the top of every page regardless of how long the table of contents
+   is. Falls back to a normal inline block only on small screens, where a
+   fixed element would overlap the title. */
+.back-to-index {
+  position: fixed;
+  top: 0.6rem;
+  left: 0.8rem;
+  z-index: 1000;
+  margin: 0;
+  font-size: 0.9em;
+}
+.back-to-index a {
+  background: rgba(255, 255, 255, 0.85);
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.25rem;
+}
+@media screen and (max-width: 992px) {
+  .back-to-index {
+    position: static;
+    margin-bottom: 1rem;
+  }
+  .back-to-index a { background: none; padding: 0; }
+}
+</style>
 </head>
 <body class="article">
 <div id="header">
@@ -457,12 +483,23 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <li><a href="#_reading_the_timestamp_nanoseconds_not_seconds">3.1. Reading the timestamp (nanoseconds, not seconds)</a></li>
 </ul>
 </li>
+<li><a href="#_smbus_transaction_waveforms">4. SMBus transaction waveforms</a>
+<ul class="sectlevel2">
+<li><a href="#_how_the_driver_uses_i2c">4.1. How the driver uses I2C</a></li>
+<li><a href="#_byte_write_and_byte_read">4.2. Byte write and byte read</a></li>
+<li><a href="#_16_bit_word_accessand_why_swapped">4.3. 16-bit (word) access&#8201;&#8212;&#8201;and why "swapped"</a></li>
+<li><a href="#_overall_a_full_lifecycle">4.4. Overall: a full lifecycle</a></li>
+</ul>
+</li>
 </ul>
 </div>
 </div>
 <div id="content">
 <div id="preamble">
 <div class="sectionbody">
+<div class="paragraph back-to-index">
+<p><a href="index.html">&#8592; Back to documentation index</a></p>
+</div>
 <div class="paragraph">
 <p>Host-side inspection of the device&#8217;s binary interfaces: decoding the
 simulator&#8217;s register file and captured ALS buffers with
@@ -560,7 +597,7 @@ it. The Pattern Data view should now show, for this capture:</p>
 </ul>
 </div>
 <div class="paragraph">
-<p>To capture a different state (e.g. the SLEEP baseline), disable the
+<p>To capture a different state (e.g. the Continuousgit baseline), disable the
 consumer (<code>echo 0 &gt; events/in_illuminance_thresh_either_en</code>) and repeat
 from Step 1.</p>
 </div>
@@ -568,7 +605,7 @@ from Step 1.</p>
 <div class="content">
 <img src="images/imhex-regs-snapshot.png" alt="ImHex Pattern Data view of the envcombo register dump" width="900">
 </div>
-<div class="title">Figure 1. ImHex decoding a register snapshot via <code>docs/imhex/envcombo-als.hexpat</code>&#8201;&#8212;&#8201;here the SLEEP baseline (<code>pwr_mode = Sleep</code>, a 100/800 threshold window)</div>
+<div class="title">Figure 1. ImHex decoding a register snapshot via <code>docs/imhex/envcombo-als.hexpat</code>&#8201;&#8212;&#8201;here the Continuous baseline (<code>pwr_mode = Continuous</code>, a 100/800 threshold window)</div>
 </div>
 <div class="admonitionblock note">
 <table>
@@ -596,11 +633,19 @@ sysfs path above and is not used here.</p>
 </td>
 <td class="content">
 <div class="paragraph">
-<p><code>docs/imhex/envcombo-als.hexpat</code> uses typed enums inside bitfields and LSB-first
-bitfield order, which is correct on current ImHex. If your build renders
-the CFG fields reversed (e.g. <code>als_en</code> landing in the low bits), add
-<code>#pragma bitfield_order right_to_left</code>&#8201;&#8212;&#8201;there is a comment in the file
-marking where.</p>
+<p><code>docs/imhex/envcombo-als.hexpat</code> is declared <code>#pragma endian little</code> so the
+bitfields fill LSB-first (first member = bit 0); the three 16-bit fields
+(<code>als_out</code> and the two thresholds) are MSB-first and are tagged <code>be</code>
+individually. This matters: under <code>#pragma endian big</code> ImHex 1.38.x fills
+bitfields <strong>MSB-first</strong>, which silently mis-decodes CFG/INT_CFG/STATUS&#8201;&#8212;&#8201;e.g.
+a CFG of <code>0x84</code> reads back <code>als_en = 0</code> instead of 1, with the set bits
+disappearing into the padding fields. If you see all-zero bitfield fields,
+that flipped endian is why.</p>
+</div>
+<div class="paragraph">
+<p>Each bitfield register is wrapped in a small <code>Reg8&lt;T&gt;</code> union so the Pattern
+Data view shows the raw byte <strong>and</strong> the decoded fields together&#8201;&#8212;&#8201;<code>cfg.raw</code>
+reads <code>0x84</code> next to <code>cfg.bits.als_en = 1</code>.</p>
 </div>
 </td>
 </tr>
@@ -737,10 +782,188 @@ view, so rely on that rather than the inspector rows.</p>
 </div>
 </div>
 </div>
+<div class="sect1">
+<h2 id="_smbus_transaction_waveforms">4. SMBus transaction waveforms</h2>
+<div class="sectionbody">
+<div class="paragraph">
+<p>The captures above decode the device&#8217;s registers <strong>at rest</strong>; this section
+shows the same bytes <strong>in motion</strong>&#8201;&#8212;&#8201;the bus transactions the driver uses to
+read and write them. The driver never touches a bus directly: it issues
+four <code>i2c_smbus_*</code> primitives (<a href="../recipes-kernel/envcombo-driver/files/envcombo.c"><code>envcombo.c</code></a>,
+<code>envcombo_read_reg</code> / <code>write_reg</code> / <code>read_reg16</code> / <code>write_reg16</code>) and the
+kernel&#8217;s SMBus layer turns each into a START / address / command / data /
+STOP sequence on the wire. The device answers at 7-bit address <strong>0x39</strong>, so
+the address byte is <code>0x72</code> for a write (<code>0x39&lt;&lt;1</code>) and <code>0x73</code> for a read.</p>
+</div>
+<div class="admonitionblock note">
+<table>
+<tr>
+<td class="icon">
+<div class="title">Note</div>
+</td>
+<td class="content">
+<div class="paragraph">
+<p>These are <strong>idealized protocol timing diagrams</strong>, not captured traces. The
+"device" here is a software kernel module
+(<a href="../recipes-kernel/envcombo-sim/files/i2c-envcombo-sim.c"><code>i2c-envcombo-sim.c</code></a>)
+reached through Linux&#8217;s SMBus calls, so no physical SCL/SDA lines toggle
+and there is nothing to capture with a logic analyzer. The waveforms below
+are drawn from the SMBus spec to show the byte sequence each driver call
+generates; the <code>SCL</code> lane is a schematic clock, and the <code>Drives</code> lane marks
+which side&#8201;&#8212;&#8201;<strong>Master</strong> (driver) or <strong>Slave</strong> (device)&#8201;&#8212;&#8201;owns <code>SDA</code> in each
+phase.</p>
+</div>
+</td>
+</tr>
+</table>
+</div>
+<div class="sect2">
+<h3 id="_how_the_driver_uses_i2c">4.1. How the driver uses I2C</h3>
+<div class="paragraph">
+<p>The SoC&#8217;s I2C controller is the bus <strong>master</strong>; the ENV-COMBO is the <strong>slave</strong> at
+address <strong>0x39</strong>. The driver never names that address&#8201;&#8212;&#8201;at probe it is handed a
+<code>struct i2c_client</code> whose <code>addr</code> is already set at the device end, and binds by
+<strong>name</strong> (<code>"envcombo"</code>), so it would work unchanged at a different address.</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="diagrams/svg/i2c-master-slave.svg" alt="I2C master/slave topology" width="650">
+</div>
+</div>
+<div class="paragraph">
+<p>Register access goes through four SMBus helpers over <code>i2c_smbus_*</code> calls:
+<code>read_reg</code> / <code>write_reg</code> (8-bit, <code>*_byte_data</code>) and <code>read_reg16</code> /
+<code>write_reg16</code> (16-bit big-endian fields like ALS_OUT and the thresholds, via
+the <code>*_word_swapped</code> variants&#8201;&#8212;&#8201;both bytes in one transaction so the device
+can&#8217;t latch a new sample mid-pair). With only 19 registers the driver skips a
+regmap; probe gates on <code>i2c_check_functionality(SMBUS_BYTE_DATA |
+SMBUS_WORD_DATA)</code>.</p>
+</div>
+<div class="paragraph">
+<p>The address stays the 7-bit value <strong>0x39</strong> everywhere in software; the
+controller shifts it up by one only when framing the transaction, since the
+wire&#8217;s first byte packs the address into bits [7:1] and the R/W direction into
+bit 0:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre>0x39 &lt;&lt; 1       = 0x72   -&gt; bit0 = 0  (WRITE)
+(0x39 &lt;&lt; 1) | 1 = 0x73   -&gt; bit0 = 1  (READ)</pre>
+</div>
+</div>
+<div class="paragraph">
+<p>That direction bit is <strong>why a register read needs a repeated START</strong>: the master
+first writes the register index (<code>0x72</code>), then re-sends the address with the
+read bit set (<code>0x73</code>) to turn the bus around&#8201;&#8212;&#8201;the <code>Sr &#8594; ADDR 0x73 &#174;</code> step
+in the read waveforms below.</p>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_byte_write_and_byte_read">4.2. Byte write and byte read</h3>
+<div class="paragraph">
+<p>A single-register write puts the register index (the SMBus <strong>command</strong> byte)
+and one data byte after the write address, then stops. This is the path
+behind <code>envcombo_write_reg</code>, e.g. CFG (0x06) being set to 0x84 at probe.</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="diagrams/svg/smbus-byte-write.svg" alt="SMBus byte write timing diagram" width="900">
+</div>
+</div>
+<div class="paragraph">
+<p>Capturing the register file afterwards and decoding it in ImHex shows the
+result of exactly that write&#8201;&#8212;&#8201;<code>cfg.raw = 0x84</code>, i.e. <code>als_en = 1</code> at the
+default gain x1 / 200 ms (the <code>Reg8&lt;CFG&gt;</code> union shows raw byte and decoded
+fields side by side):</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="images/imhex-regs-cfg-write.png" alt="ImHex Pattern Data view of the CFG register as raw byte plus decoded fields" width="900">
+</div>
+<div class="title">Figure 4. The byte written above, decoded&#8201;&#8212;&#8201;<code>cfg.raw = 0x84</code> alongside the bitfield (<code>als_en = 1</code>, <code>als_gain</code>, <code>als_time</code>)</div>
+</div>
+<div class="paragraph">
+<p>A byte read is the read-modify path&#8217;s other half: the driver first writes
+the register index, then issues a <strong>repeated START</strong> (<code>Sr</code>) and re-addresses
+the device for reading (<code>0x73</code>), so no STOP releases the bus in between.
+The slave drives the one data byte and the master ends the transfer with a
+NAK. This is <code>envcombo_read_reg</code>&#8201;&#8212;&#8201;e.g. the WHO_AM_I (0x00) identity check
+at probe returning 0xEB.</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="diagrams/svg/smbus-byte-read.svg" alt="SMBus byte read timing diagram" width="900">
+</div>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_16_bit_word_accessand_why_swapped">4.3. 16-bit (word) access&#8201;&#8212;&#8201;and why "swapped"</h3>
+<div class="paragraph">
+<p>The ALS reading and both threshold registers are 16-bit fields the device
+stores <strong>big-endian</strong> (MSB at the lower address). The driver therefore uses
+the <code>i2c_smbus_*_word_swapped</code> variants, which put the high byte on the
+wire first&#8201;&#8212;&#8201;"swapped" relative to SMBus&#8217;s native little-endian word order.
+This is the wire-level reason the <code>docs/imhex/envcombo-als.hexpat</code> pattern
+above decodes those fields MSB-first.</p>
+</div>
+<div class="paragraph">
+<p>A word write sends both data bytes (high then low) before the STOP&#8201;&#8212;&#8201;<code>envcombo_write_reg16</code>, e.g. ALS_TH_LOW (0x08) set to 100 (0x0064):</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="diagrams/svg/smbus-word-write.svg" alt="SMBus word write timing diagram" width="900">
+</div>
+</div>
+<div class="paragraph">
+<p>A word read mirrors the byte read but clocks out <strong>two</strong> data bytes: the
+master ACKs the first (MSB) to ask for more and NAKs the second (LSB) to
+end the transfer. This is <code>envcombo_read_reg16</code> reading ALS_OUT (0x04):</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="diagrams/svg/smbus-word-read.svg" alt="SMBus word read timing diagram" width="900">
+</div>
+</div>
+<div class="paragraph">
+<p>Decoding a capture in ImHex shows the matching result: the <code>be u16 als_out</code>
+field comes back MSB-first as <code>0x00F0</code> (240)&#8201;&#8212;&#8201;the <code>0x00</code> MSB and the <code>0xF0</code>
+LSB are exactly the two data bytes clocked out in the waveform above.</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="images/imhex-regs-als-read.png" alt="ImHex Pattern Data view of the 16-bit als_out register read" width="900">
+</div>
+<div class="title">Figure 5. The 16-bit <code>als_out</code> read decoded MSB-first&#8201;&#8212;&#8201;<code>0x00F0</code> from registers <code>0x04-0x05</code> (the <code>0xF0</code> LSB clocked out last)</div>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_overall_a_full_lifecycle">4.4. Overall: a full lifecycle</h3>
+<div class="paragraph">
+<p>Zoomed out to one segment per transaction, the same primitives compose into
+the driver&#8217;s real traffic: probe provisions the registers (identity check,
+calibration reads, CFG/INT_CFG, both thresholds), a one-shot raw read drives
+<code>PWR_MODE</code> to ONE-SHOT and clocks the latched ALS word back, and a threshold
+change rewrites a single 16-bit register. The <code>PWR_MODE</code> lane tracks the
+device&#8217;s power state across the run&#8201;&#8212;&#8201;SLEEP except for the one-shot
+conversion, after which the device auto-returns to SLEEP.</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="diagrams/svg/smbus-overall.svg" alt="SMBus transactions across a probe / read / set-threshold lifecycle" width="1000">
+</div>
+</div>
+<div class="paragraph">
+<p>The five diagrams are PlantUML timing sources under <code>docs/diagrams/</code>
+(<code>smbus-*.puml</code>); regenerate their SVGs the same way as the other diagrams
+(<code>plantuml -tsvg -o svg docs/diagrams/*.puml</code>).</p>
+</div>
+</div>
+</div>
+</div>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-13 07:53:18 +0300
+Last updated 2026-06-14 16:24:42 +0300
 </div>
 </div>
 </body>

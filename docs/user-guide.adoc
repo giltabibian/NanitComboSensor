@@ -2,7 +2,9 @@
 :toc:
 :toclevels: 2
 :sectnums:
+:docinfo: shared
 
+[.back-to-index]
 link:index.html[<- Back to documentation index]
 
 Host-side commands assume a Yocto 5.0 (scarthgap) checkout of poky; target-side commands run as root in the booted image (the default login, no password).

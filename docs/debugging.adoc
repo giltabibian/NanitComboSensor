@@ -2,6 +2,10 @@
 :toc:
 :toclevels: 2
 :sectnums:
+:docinfo: shared
+
+[.back-to-index]
+link:index.html[<- Back to documentation index]
 
 Host-side inspection of the device's binary interfaces: decoding the
 simulator's register file and captured ALS buffers with
@@ -76,11 +80,11 @@ it. The Pattern Data view should now show, for this capture:
 * `als_th_low = 100`, `als_th_high = 800`
 * `cfg.als_en = 1`, plus the live `als_out` reading
 
-To capture a different state (e.g. the SLEEP baseline), disable the
+To capture a different state (e.g. the Continuousgit baseline), disable the
 consumer (`echo 0 > events/in_illuminance_thresh_either_en`) and repeat
 from Step 1.
 
-.ImHex decoding a register snapshot via `docs/imhex/envcombo-als.hexpat` -- here the SLEEP baseline (`pwr_mode = Sleep`, a 100/800 threshold window)
+.ImHex decoding a register snapshot via `docs/imhex/envcombo-als.hexpat` -- here the Continuous baseline (`pwr_mode = Continuous`, a 100/800 threshold window)
 image::images/imhex-regs-snapshot.png[ImHex Pattern Data view of the envcombo register dump,900]
 
 [NOTE]
@@ -94,11 +98,18 @@ sysfs path above and is not used here.
 
 [NOTE]
 ====
-`docs/imhex/envcombo-als.hexpat` uses typed enums inside bitfields and LSB-first
-bitfield order, which is correct on current ImHex. If your build renders
-the CFG fields reversed (e.g. `als_en` landing in the low bits), add
-`#pragma bitfield_order right_to_left` -- there is a comment in the file
-marking where.
+`docs/imhex/envcombo-als.hexpat` is declared `#pragma endian little` so the
+bitfields fill LSB-first (first member = bit 0); the three 16-bit fields
+(`als_out` and the two thresholds) are MSB-first and are tagged `be`
+individually. This matters: under `#pragma endian big` ImHex 1.38.x fills
+bitfields *MSB-first*, which silently mis-decodes CFG/INT_CFG/STATUS -- e.g.
+a CFG of `0x84` reads back `als_en = 0` instead of 1, with the set bits
+disappearing into the padding fields. If you see all-zero bitfield fields,
+that flipped endian is why.
+
+Each bitfield register is wrapped in a small `Reg8<T>` union so the Pattern
+Data view shows the raw byte *and* the decoded fields together -- `cfg.raw`
+reads `0x84` next to `cfg.bits.als_en = 1`.
 ====
 
 == Graphing ALS samples
@@ -197,3 +208,127 @@ timestamp. `docs/imhex/envcombo-als-records.hexpat` instead converts
 ns -> s and formats `timestamp_ns` as a real UTC date in the Pattern Data
 view, so rely on that rather than the inspector rows.
 ====
+
+== SMBus transaction waveforms
+
+The captures above decode the device's registers *at rest*; this section
+shows the same bytes *in motion* -- the bus transactions the driver uses to
+read and write them. The driver never touches a bus directly: it issues
+four `i2c_smbus_*` primitives (link:../recipes-kernel/envcombo-driver/files/envcombo.c[`envcombo.c`],
+`envcombo_read_reg` / `write_reg` / `read_reg16` / `write_reg16`) and the
+kernel's SMBus layer turns each into a START / address / command / data /
+STOP sequence on the wire. The device answers at 7-bit address *0x39*, so
+the address byte is `0x72` for a write (`0x39<<1`) and `0x73` for a read.
+
+[NOTE]
+====
+These are *idealized protocol timing diagrams*, not captured traces. The
+"device" here is a software kernel module
+(link:../recipes-kernel/envcombo-sim/files/i2c-envcombo-sim.c[`i2c-envcombo-sim.c`])
+reached through Linux's SMBus calls, so no physical SCL/SDA lines toggle
+and there is nothing to capture with a logic analyzer. The waveforms below
+are drawn from the SMBus spec to show the byte sequence each driver call
+generates; the `SCL` lane is a schematic clock, and the `Drives` lane marks
+which side -- *Master* (driver) or *Slave* (device) -- owns `SDA` in each
+phase.
+====
+
+=== How the driver uses I2C
+
+The SoC's I2C controller is the bus *master*; the ENV-COMBO is the *slave* at
+address *0x39*. The driver never names that address -- at probe it is handed a
+`struct i2c_client` whose `addr` is already set at the device end, and binds by
+*name* (`"envcombo"`), so it would work unchanged at a different address.
+
+image::diagrams/svg/i2c-master-slave.svg[I2C master/slave topology,650]
+
+Register access goes through four SMBus helpers over `i2c_smbus_*` calls:
+`read_reg` / `write_reg` (8-bit, `*_byte_data`) and `read_reg16` /
+`write_reg16` (16-bit big-endian fields like ALS_OUT and the thresholds, via
+the `*_word_swapped` variants -- both bytes in one transaction so the device
+can't latch a new sample mid-pair). With only 19 registers the driver skips a
+regmap; probe gates on `i2c_check_functionality(SMBUS_BYTE_DATA |
+SMBUS_WORD_DATA)`.
+
+The address stays the 7-bit value *0x39* everywhere in software; the
+controller shifts it up by one only when framing the transaction, since the
+wire's first byte packs the address into bits [7:1] and the R/W direction into
+bit 0:
+
+----
+0x39 << 1       = 0x72   -> bit0 = 0  (WRITE)
+(0x39 << 1) | 1 = 0x73   -> bit0 = 1  (READ)
+----
+
+That direction bit is *why a register read needs a repeated START*: the master
+first writes the register index (`0x72`), then re-sends the address with the
+read bit set (`0x73`) to turn the bus around -- the `Sr -> ADDR 0x73 (R)` step
+in the read waveforms below.
+
+=== Byte write and byte read
+
+A single-register write puts the register index (the SMBus *command* byte)
+and one data byte after the write address, then stops. This is the path
+behind `envcombo_write_reg`, e.g. CFG (0x06) being set to 0x84 at probe.
+
+image::diagrams/svg/smbus-byte-write.svg[SMBus byte write timing diagram,900]
+
+Capturing the register file afterwards and decoding it in ImHex shows the
+result of exactly that write -- `cfg.raw = 0x84`, i.e. `als_en = 1` at the
+default gain x1 / 200 ms (the `Reg8<CFG>` union shows raw byte and decoded
+fields side by side):
+
+.The byte written above, decoded -- `cfg.raw = 0x84` alongside the bitfield (`als_en = 1`, `als_gain`, `als_time`)
+image::images/imhex-regs-cfg-write.png[ImHex Pattern Data view of the CFG register as raw byte plus decoded fields,900]
+
+A byte read is the read-modify path's other half: the driver first writes
+the register index, then issues a *repeated START* (`Sr`) and re-addresses
+the device for reading (`0x73`), so no STOP releases the bus in between.
+The slave drives the one data byte and the master ends the transfer with a
+NAK. This is `envcombo_read_reg` -- e.g. the WHO_AM_I (0x00) identity check
+at probe returning 0xEB.
+
+image::diagrams/svg/smbus-byte-read.svg[SMBus byte read timing diagram,900]
+
+=== 16-bit (word) access -- and why "swapped"
+
+The ALS reading and both threshold registers are 16-bit fields the device
+stores *big-endian* (MSB at the lower address). The driver therefore uses
+the `i2c_smbus_*_word_swapped` variants, which put the high byte on the
+wire first -- "swapped" relative to SMBus's native little-endian word order.
+This is the wire-level reason the `docs/imhex/envcombo-als.hexpat` pattern
+above decodes those fields MSB-first.
+
+A word write sends both data bytes (high then low) before the STOP --
+`envcombo_write_reg16`, e.g. ALS_TH_LOW (0x08) set to 100 (0x0064):
+
+image::diagrams/svg/smbus-word-write.svg[SMBus word write timing diagram,900]
+
+A word read mirrors the byte read but clocks out *two* data bytes: the
+master ACKs the first (MSB) to ask for more and NAKs the second (LSB) to
+end the transfer. This is `envcombo_read_reg16` reading ALS_OUT (0x04):
+
+image::diagrams/svg/smbus-word-read.svg[SMBus word read timing diagram,900]
+
+Decoding a capture in ImHex shows the matching result: the `be u16 als_out`
+field comes back MSB-first as `0x00F0` (240) -- the `0x00` MSB and the `0xF0`
+LSB are exactly the two data bytes clocked out in the waveform above.
+
+.The 16-bit `als_out` read decoded MSB-first -- `0x00F0` from registers `0x04-0x05` (the `0xF0` LSB clocked out last)
+image::images/imhex-regs-als-read.png[ImHex Pattern Data view of the 16-bit als_out register read,900]
+
+=== Overall: a full lifecycle
+
+Zoomed out to one segment per transaction, the same primitives compose into
+the driver's real traffic: probe provisions the registers (identity check,
+calibration reads, CFG/INT_CFG, both thresholds), a one-shot raw read drives
+`PWR_MODE` to ONE-SHOT and clocks the latched ALS word back, and a threshold
+change rewrites a single 16-bit register. The `PWR_MODE` lane tracks the
+device's power state across the run -- SLEEP except for the one-shot
+conversion, after which the device auto-returns to SLEEP.
+
+image::diagrams/svg/smbus-overall.svg[SMBus transactions across a probe / read / set-threshold lifecycle,1000]
+
+The five diagrams are PlantUML timing sources under `docs/diagrams/`
+(`smbus-*.puml`); regenerate their SVGs the same way as the other diagrams
+(`+plantuml -tsvg -o svg docs/diagrams/*.puml+`).

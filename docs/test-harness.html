@@ -436,6 +436,32 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 #footer-text{color:rgba(0,0,0,.6);font-size:.9em}}
 @media amzn-kf8{#header,#content,#footnotes,#footer{padding:0}}
 </style>
+<style>
+/* Pin the "Back to documentation index" link to the upper-left corner so it
+   stays at the top of every page regardless of how long the table of contents
+   is. Falls back to a normal inline block only on small screens, where a
+   fixed element would overlap the title. */
+.back-to-index {
+  position: fixed;
+  top: 0.6rem;
+  left: 0.8rem;
+  z-index: 1000;
+  margin: 0;
+  font-size: 0.9em;
+}
+.back-to-index a {
+  background: rgba(255, 255, 255, 0.85);
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.25rem;
+}
+@media screen and (max-width: 992px) {
+  .back-to-index {
+    position: static;
+    margin-bottom: 1rem;
+  }
+  .back-to-index a { background: none; padding: 0; }
+}
+</style>
 </head>
 <body class="article">
 <div id="header">
@@ -453,7 +479,7 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <div id="content">
 <div id="preamble">
 <div class="sectionbody">
-<div class="paragraph">
+<div class="paragraph back-to-index">
 <p><a href="index.html">&#8592; Back to documentation index</a></p>
 </div>
 <div class="paragraph">
@@ -741,7 +767,7 @@ printed in the run&#8217;s banner:</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-13 08:32:50 +0300
+Last updated 2026-06-14 12:32:47 +0300
 </div>
 </div>
 </body>

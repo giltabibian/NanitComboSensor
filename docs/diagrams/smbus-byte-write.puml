@@ -1,0 +1,43 @@
+@startuml smbus-byte-write
+' SMBus byte write -- i2c_smbus_write_byte_data(client, reg, val)
+' Example: CFG (0x06) <- 0x84 (ALS on, default gain/time)
+title SMBus byte write\ni2c_smbus_write_byte_data(0x39, reg=0x06, val=0x84)
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+scale 1 as 34 pixels
+
+clock SCL with period 2
+concise "Drives" as DRV
+robust "SDA" as SDA
+
+@0
+SDA is high
+DRV is "Master" #LightCyan
+@2
+SDA is "S" #Gold
+@4
+SDA is "ADDR 0x72  (0x39<<1 | W)"
+@6
+SDA is "ACK"
+DRV is "Slave" #Wheat
+@8
+SDA is "REG 0x06"
+DRV is "Master" #LightCyan
+@10
+SDA is "ACK"
+DRV is "Slave" #Wheat
+@12
+SDA is "DATA 0x84"
+DRV is "Master" #LightCyan
+@14
+SDA is "ACK"
+DRV is "Slave" #Wheat
+@16
+SDA is "P" #Gold
+DRV is "Master" #LightCyan
+@18
+SDA is high
+@20
+
+highlight 2 to 16 #Honeydew;line:Green : one transaction
+@enduml
