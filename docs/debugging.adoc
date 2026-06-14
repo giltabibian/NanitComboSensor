@@ -17,70 +17,6 @@ below follows the same pattern: a one-shot `nc` listener in WSL2 (where the
 guest's slirp gateway `10.0.2.2` resolves) writes the blob to a
 Windows-visible path, then the guest sends it.
 
-== SMBus transaction waveforms
-
-Before decoding the bytes at rest it helps to see them in motion. The
-driver never touches a bus directly -- it issues four `i2c_smbus_*`
-primitives (link:../recipes-kernel/envcombo-driver/files/envcombo.c[`envcombo.c`],
-`envcombo_read_reg` / `write_reg` / `read_reg16` / `write_reg16`) and the
-kernel's SMBus layer turns each into a START / address / command / data /
-STOP sequence on the wire. The device answers at 7-bit address *0x39*, so
-the address byte is `0x72` for a write (`0x39<<1`) and `0x73` for a read.
-
-[NOTE]
-====
-These are *idealized protocol timing diagrams*, not captured traces. The
-"device" here is a software kernel module
-(link:../recipes-kernel/envcombo-sim/files/i2c-envcombo-sim.c[`i2c-envcombo-sim.c`])
-reached through Linux's SMBus calls, so no physical SCL/SDA lines toggle
-and there is nothing to capture with a logic analyzer. The waveforms below
-are drawn from the SMBus spec to show the byte sequence each driver call
-generates; the `SCL` lane is a schematic clock, and the `Drives` lane marks
-which side -- *Master* (driver) or *Slave* (device) -- owns `SDA` in each
-phase.
-====
-
-=== Byte write and byte read
-
-A single-register write puts the register index (the SMBus *command* byte)
-and one data byte after the write address, then stops. This is the path
-behind `envcombo_write_reg`, e.g. CFG (0x06) being set to 0x84 at probe.
-
-image::diagrams/svg/smbus-byte-write.svg[SMBus byte write timing diagram,900]
-
-A byte read is the read-modify path's other half: the driver first writes
-the register index, then issues a *repeated START* (`Sr`) and re-addresses
-the device for reading (`0x73`), so no STOP releases the bus in between.
-The slave drives the one data byte and the master ends the transfer with a
-NAK. This is `envcombo_read_reg` -- e.g. the WHO_AM_I (0x00) identity check
-at probe returning 0xEB.
-
-image::diagrams/svg/smbus-byte-read.svg[SMBus byte read timing diagram,900]
-
-=== 16-bit (word) access -- and why "swapped"
-
-The ALS reading and both threshold registers are 16-bit fields the device
-stores *big-endian* (MSB at the lower address). The driver therefore uses
-the `i2c_smbus_*_word_swapped` variants, which put the high byte on the
-wire first -- "swapped" relative to SMBus's native little-endian word order.
-This is the wire-level reason the `docs/imhex/envcombo-als.hexpat` pattern
-decodes those fields MSB-first.
-
-A word write sends both data bytes (high then low) before the STOP --
-`envcombo_write_reg16`, e.g. ALS_TH_LOW (0x08) set to 100 (0x0064):
-
-image::diagrams/svg/smbus-word-write.svg[SMBus word write timing diagram,900]
-
-A word read mirrors the byte read but clocks out *two* data bytes: the
-master ACKs the first (MSB) to ask for more and NAKs the second (LSB) to
-end the transfer. This is `envcombo_read_reg16` reading ALS_OUT (0x04):
-
-image::diagrams/svg/smbus-word-read.svg[SMBus word read timing diagram,900]
-
-The four diagrams are PlantUML timing sources under `docs/diagrams/`
-(`smbus-*.puml`); regenerate their SVGs the same way as the other diagrams
-(`+plantuml -tsvg -o svg docs/diagrams/*.puml+`).
-
 == Inspecting register state with ImHex
 
 The simulator exposes its full register file at
@@ -261,3 +197,80 @@ timestamp. `docs/imhex/envcombo-als-records.hexpat` instead converts
 ns -> s and formats `timestamp_ns` as a real UTC date in the Pattern Data
 view, so rely on that rather than the inspector rows.
 ====
+
+== SMBus transaction waveforms
+
+The captures above decode the device's registers *at rest*; this section
+shows the same bytes *in motion* -- the bus transactions the driver uses to
+read and write them. The driver never touches a bus directly: it issues
+four `i2c_smbus_*` primitives (link:../recipes-kernel/envcombo-driver/files/envcombo.c[`envcombo.c`],
+`envcombo_read_reg` / `write_reg` / `read_reg16` / `write_reg16`) and the
+kernel's SMBus layer turns each into a START / address / command / data /
+STOP sequence on the wire. The device answers at 7-bit address *0x39*, so
+the address byte is `0x72` for a write (`0x39<<1`) and `0x73` for a read.
+
+[NOTE]
+====
+These are *idealized protocol timing diagrams*, not captured traces. The
+"device" here is a software kernel module
+(link:../recipes-kernel/envcombo-sim/files/i2c-envcombo-sim.c[`i2c-envcombo-sim.c`])
+reached through Linux's SMBus calls, so no physical SCL/SDA lines toggle
+and there is nothing to capture with a logic analyzer. The waveforms below
+are drawn from the SMBus spec to show the byte sequence each driver call
+generates; the `SCL` lane is a schematic clock, and the `Drives` lane marks
+which side -- *Master* (driver) or *Slave* (device) -- owns `SDA` in each
+phase.
+====
+
+=== Byte write and byte read
+
+A single-register write puts the register index (the SMBus *command* byte)
+and one data byte after the write address, then stops. This is the path
+behind `envcombo_write_reg`, e.g. CFG (0x06) being set to 0x84 at probe.
+
+image::diagrams/svg/smbus-byte-write.svg[SMBus byte write timing diagram,900]
+
+A byte read is the read-modify path's other half: the driver first writes
+the register index, then issues a *repeated START* (`Sr`) and re-addresses
+the device for reading (`0x73`), so no STOP releases the bus in between.
+The slave drives the one data byte and the master ends the transfer with a
+NAK. This is `envcombo_read_reg` -- e.g. the WHO_AM_I (0x00) identity check
+at probe returning 0xEB.
+
+image::diagrams/svg/smbus-byte-read.svg[SMBus byte read timing diagram,900]
+
+=== 16-bit (word) access -- and why "swapped"
+
+The ALS reading and both threshold registers are 16-bit fields the device
+stores *big-endian* (MSB at the lower address). The driver therefore uses
+the `i2c_smbus_*_word_swapped` variants, which put the high byte on the
+wire first -- "swapped" relative to SMBus's native little-endian word order.
+This is the wire-level reason the `docs/imhex/envcombo-als.hexpat` pattern
+above decodes those fields MSB-first.
+
+A word write sends both data bytes (high then low) before the STOP --
+`envcombo_write_reg16`, e.g. ALS_TH_LOW (0x08) set to 100 (0x0064):
+
+image::diagrams/svg/smbus-word-write.svg[SMBus word write timing diagram,900]
+
+A word read mirrors the byte read but clocks out *two* data bytes: the
+master ACKs the first (MSB) to ask for more and NAKs the second (LSB) to
+end the transfer. This is `envcombo_read_reg16` reading ALS_OUT (0x04):
+
+image::diagrams/svg/smbus-word-read.svg[SMBus word read timing diagram,900]
+
+=== Overall: a full lifecycle
+
+Zoomed out to one segment per transaction, the same primitives compose into
+the driver's real traffic: probe provisions the registers (identity check,
+calibration reads, CFG/INT_CFG, both thresholds), a one-shot raw read drives
+`PWR_MODE` to ONE-SHOT and clocks the latched ALS word back, and a threshold
+change rewrites a single 16-bit register. The `PWR_MODE` lane tracks the
+device's power state across the run -- SLEEP except for the one-shot
+conversion, after which the device auto-returns to SLEEP.
+
+image::diagrams/svg/smbus-overall.svg[SMBus transactions across a probe / read / set-threshold lifecycle,1000]
+
+The five diagrams are PlantUML timing sources under `docs/diagrams/`
+(`smbus-*.puml`); regenerate their SVGs the same way as the other diagrams
+(`+plantuml -tsvg -o svg docs/diagrams/*.puml+`).

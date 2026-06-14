@@ -1,0 +1,50 @@
+@startuml smbus-overall
+' Overall scenario -- the SMBus transactions the driver issues across a
+' realistic lifecycle: probe/init, then a one-shot raw read, then setting a
+' threshold. Zoomed out to one segment per transaction (no bit-level SCL).
+title SMBus transactions across a lifecycle\nprobe -> one-shot raw read -> set threshold
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+scale 1 as 16 pixels
+
+concise "Operation" as OP
+concise "SMBus txn" as TX
+robust "PWR_MODE (0x12)" as PWR
+
+@0
+OP is "Probe / init" #LightCyan
+TX is "RD WHO_AM_I"
+PWR is SLEEP
+@6
+TX is "RD CAL"
+@12
+TX is "WR CFG"
+@18
+TX is "WR INT_CFG"
+@24
+TX is "WR TH_LOW"
+@30
+TX is "WR TH_HIGH"
+@36
+OP is "One-shot raw read" #Wheat
+TX is "WR PWR_MODE"
+@40
+PWR is "ONE-SHOT"
+@42
+TX is "RD STATUS"
+@48
+TX is "RD ALS"
+@52
+PWR is SLEEP
+@54
+OP is "Set threshold" #PaleGreen
+TX is "WR TH_HIGH"
+@60
+OP is {hidden}
+TX is {hidden}
+@62
+
+highlight 0 to 36 #F4FBFF : provision registers
+highlight 36 to 54 #FFFBF4 : measure
+highlight 54 to 60 #F4FFF4 : reconfigure
+@enduml
