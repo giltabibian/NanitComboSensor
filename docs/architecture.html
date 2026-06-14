@@ -831,17 +831,17 @@ conversion produces one scan record.</p>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>in_illuminance_integration_time</code> (+<code>_available</code>)</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">CFG[2:1]</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">One of <code>0.05 0.1 0.2 0.4</code> s; when the CALIB_ALS_TIME override is set, writes return <code>-EOPNOTSUPP</code> and <code>_available</code> lists only the calibrated time</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">One of <code>0.05 0.1 0.2 0.4</code> <strong>seconds</strong> (<code>IIO_VAL_INT_PLUS_MICRO</code>); when the CALIB_ALS_TIME override is set, writes return <code>-EOPNOTSUPP</code> and <code>_available</code> lists only the calibrated time</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>events/in_illuminance_thresh_rising_value</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">ALS_TH_HIGH</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">0..65535; must stay &gt;= falling value</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Raw ALS counts (<code>0..65535</code>, same unit as <code>in_illuminance_raw</code>); must stay &gt;= falling value</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>events/in_illuminance_thresh_falling_value</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">ALS_TH_LOW</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">0..65535; must stay &lt;= rising value</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Raw ALS counts (<code>0..65535</code>); must stay &lt;= rising value</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>events/in_illuminance_thresh_either_en</code></p></td>
@@ -977,7 +977,7 @@ state to leave behind on unbind.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-14 12:32:45 +0300
+Last updated 2026-06-14 20:06:03 +0300
 </div>
 </div>
 </body>
