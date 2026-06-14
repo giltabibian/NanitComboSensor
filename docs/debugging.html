@@ -622,6 +622,18 @@ reads <code>0x84</code> next to <code>cfg.bits.als_en = 1</code>.</p>
 </tr>
 </table>
 </div>
+<div class="imageblock">
+<div class="content">
+<img src="images/imhex-regs-cfg-write.png" alt="ImHex Pattern Data view of the CFG register as raw byte plus decoded fields" width="900">
+</div>
+<div class="title">Figure 2. The <code>Reg8&lt;CFG&gt;</code> union in action&#8201;&#8212;&#8201;<code>cfg.raw = 0x84</code> shown alongside the decoded bitfield (<code>als_en = 1</code>, <code>als_gain</code>, <code>als_time</code>)</div>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="images/imhex-regs-als-read.png" alt="ImHex Pattern Data view of the 16-bit als_out register read" width="900">
+</div>
+<div class="title">Figure 3. The <code>be u16 als_out</code> field decoded MSB-first&#8201;&#8212;&#8201;the latched 16-bit ALS reading from registers <code>0x04-0x05</code></div>
+</div>
 </div>
 </div>
 </div>
@@ -664,7 +676,7 @@ the simulator&#8217;s sawtooth ramp.</p>
 <div class="content">
 <img src="images/imhex-plot-snapshot.png" alt="ImHex line_plot visualizer of the captured ALS samples" width="900">
 </div>
-<div class="title">Figure 2. ImHex <code>line_plot</code> of a captured ALS buffer&#8201;&#8212;&#8201;the simulator&#8217;s sawtooth ramp</div>
+<div class="title">Figure 4. ImHex <code>line_plot</code> of a captured ALS buffer&#8201;&#8212;&#8201;the simulator&#8217;s sawtooth ramp</div>
 </div>
 </div>
 </div>
@@ -715,7 +727,7 @@ echo 0 &gt; buffer/enable</code></pre>
 <div class="content">
 <img src="images/imhex-records-snapshot.png" alt="ImHex Pattern Data view of the decoded ALS records" width="900">
 </div>
-<div class="title">Figure 3. ImHex decoding the 16-byte ALS records&#8201;&#8212;&#8201;<code>light</code>, padding, and the <code>s64</code> nanosecond timestamp per sample</div>
+<div class="title">Figure 5. ImHex decoding the 16-byte ALS records&#8201;&#8212;&#8201;<code>light</code>, padding, and the <code>s64</code> nanosecond timestamp per sample</div>
 </div>
 <div class="sect2">
 <h3 id="_reading_the_timestamp_nanoseconds_not_seconds">3.1. Reading the timestamp (nanoseconds, not seconds)</h3>
@@ -911,7 +923,7 @@ conversion, after which the device auto-returns to SLEEP.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-14 12:07:31 +0300
+Last updated 2026-06-14 12:19:40 +0300
 </div>
 </div>
 </body>

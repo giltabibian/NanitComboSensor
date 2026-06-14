@@ -108,6 +108,12 @@ Data view shows the raw byte *and* the decoded fields together -- `cfg.raw`
 reads `0x84` next to `cfg.bits.als_en = 1`.
 ====
 
+.The `Reg8<CFG>` union in action -- `cfg.raw = 0x84` shown alongside the decoded bitfield (`als_en = 1`, `als_gain`, `als_time`)
+image::images/imhex-regs-cfg-write.png[ImHex Pattern Data view of the CFG register as raw byte plus decoded fields,900]
+
+.The `be u16 als_out` field decoded MSB-first -- the latched 16-bit ALS reading from registers `0x04-0x05`
+image::images/imhex-regs-als-read.png[ImHex Pattern Data view of the 16-bit als_out register read,900]
+
 == Graphing ALS samples
 
 For a light-vs-time plot rather than a register snapshot, capture the
