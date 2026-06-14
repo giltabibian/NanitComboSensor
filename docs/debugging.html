@@ -436,31 +436,6 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 #footer-text{color:rgba(0,0,0,.6);font-size:.9em}}
 @media amzn-kf8{#header,#content,#footnotes,#footer{padding:0}}
 </style>
-<style>
-/* Pin the "Back to documentation index" link to the upper-left corner.
-   Falls back to a normal inline block on narrow screens so it never
-   overlaps the title. */
-.back-to-index {
-  position: fixed;
-  top: 0.6rem;
-  left: 0.8rem;
-  z-index: 1000;
-  margin: 0;
-  font-size: 0.9em;
-}
-.back-to-index a {
-  background: rgba(255, 255, 255, 0.85);
-  padding: 0.15rem 0.4rem;
-  border-radius: 0.25rem;
-}
-@media screen and (max-width: 1400px) {
-  .back-to-index {
-    position: static;
-    margin-bottom: 1rem;
-  }
-  .back-to-index a { background: none; padding: 0; }
-}
-</style>
 </head>
 <body class="article">
 <div id="header">
@@ -596,7 +571,7 @@ it. The Pattern Data view should now show, for this capture:</p>
 </ul>
 </div>
 <div class="paragraph">
-<p>To capture a different state (e.g. the SLEEP baseline), disable the
+<p>To capture a different state (e.g. the Continuousgit baseline), disable the
 consumer (<code>echo 0 &gt; events/in_illuminance_thresh_either_en</code>) and repeat
 from Step 1.</p>
 </div>
@@ -604,7 +579,7 @@ from Step 1.</p>
 <div class="content">
 <img src="images/imhex-regs-snapshot.png" alt="ImHex Pattern Data view of the envcombo register dump" width="900">
 </div>
-<div class="title">Figure 1. ImHex decoding a register snapshot via <code>docs/imhex/envcombo-als.hexpat</code>&#8201;&#8212;&#8201;here the SLEEP baseline (<code>pwr_mode = Sleep</code>, a 100/800 threshold window)</div>
+<div class="title">Figure 1. ImHex decoding a register snapshot via <code>docs/imhex/envcombo-als.hexpat</code>&#8201;&#8212;&#8201;here the Continuous baseline (<code>pwr_mode = Continuous</code>, a 100/800 threshold window)</div>
 </div>
 <div class="admonitionblock note">
 <table>
@@ -650,18 +625,6 @@ reads <code>0x84</code> next to <code>cfg.bits.als_en = 1</code>.</p>
 </tr>
 </table>
 </div>
-<div class="imageblock">
-<div class="content">
-<img src="images/imhex-regs-cfg-write.png" alt="ImHex Pattern Data view of the CFG register as raw byte plus decoded fields" width="900">
-</div>
-<div class="title">Figure 2. The <code>Reg8&lt;CFG&gt;</code> union in action&#8201;&#8212;&#8201;<code>cfg.raw = 0x84</code> shown alongside the decoded bitfield (<code>als_en = 1</code>, <code>als_gain</code>, <code>als_time</code>)</div>
-</div>
-<div class="imageblock">
-<div class="content">
-<img src="images/imhex-regs-als-read.png" alt="ImHex Pattern Data view of the 16-bit als_out register read" width="900">
-</div>
-<div class="title">Figure 3. The <code>be u16 als_out</code> field decoded MSB-first&#8201;&#8212;&#8201;the latched 16-bit ALS reading from registers <code>0x04-0x05</code></div>
-</div>
 </div>
 </div>
 </div>
@@ -704,7 +667,7 @@ the simulator&#8217;s sawtooth ramp.</p>
 <div class="content">
 <img src="images/imhex-plot-snapshot.png" alt="ImHex line_plot visualizer of the captured ALS samples" width="900">
 </div>
-<div class="title">Figure 4. ImHex <code>line_plot</code> of a captured ALS buffer&#8201;&#8212;&#8201;the simulator&#8217;s sawtooth ramp</div>
+<div class="title">Figure 2. ImHex <code>line_plot</code> of a captured ALS buffer&#8201;&#8212;&#8201;the simulator&#8217;s sawtooth ramp</div>
 </div>
 </div>
 </div>
@@ -755,7 +718,7 @@ echo 0 &gt; buffer/enable</code></pre>
 <div class="content">
 <img src="images/imhex-records-snapshot.png" alt="ImHex Pattern Data view of the decoded ALS records" width="900">
 </div>
-<div class="title">Figure 5. ImHex decoding the 16-byte ALS records&#8201;&#8212;&#8201;<code>light</code>, padding, and the <code>s64</code> nanosecond timestamp per sample</div>
+<div class="title">Figure 3. ImHex decoding the 16-byte ALS records&#8201;&#8212;&#8201;<code>light</code>, padding, and the <code>s64</code> nanosecond timestamp per sample</div>
 </div>
 <div class="sect2">
 <h3 id="_reading_the_timestamp_nanoseconds_not_seconds">3.1. Reading the timestamp (nanoseconds, not seconds)</h3>
@@ -882,6 +845,18 @@ behind <code>envcombo_write_reg</code>, e.g. CFG (0x06) being set to 0x84 at pro
 </div>
 </div>
 <div class="paragraph">
+<p>Capturing the register file afterwards and decoding it in ImHex shows the
+result of exactly that write&#8201;&#8212;&#8201;<code>cfg.raw = 0x84</code>, i.e. <code>als_en = 1</code> at the
+default gain x1 / 200 ms (the <code>Reg8&lt;CFG&gt;</code> union shows raw byte and decoded
+fields side by side):</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="images/imhex-regs-cfg-write.png" alt="ImHex Pattern Data view of the CFG register as raw byte plus decoded fields" width="900">
+</div>
+<div class="title">Figure 4. The byte written above, decoded&#8201;&#8212;&#8201;<code>cfg.raw = 0x84</code> alongside the bitfield (<code>als_en = 1</code>, <code>als_gain</code>, <code>als_time</code>)</div>
+</div>
+<div class="paragraph">
 <p>A byte read is the read-modify path&#8217;s other half: the driver first writes
 the register index, then issues a <strong>repeated START</strong> (<code>Sr</code>) and re-addresses
 the device for reading (<code>0x73</code>), so no STOP releases the bus in between.
@@ -923,6 +898,17 @@ end the transfer. This is <code>envcombo_read_reg16</code> reading ALS_OUT (0x04
 <img src="diagrams/svg/smbus-word-read.svg" alt="SMBus word read timing diagram" width="900">
 </div>
 </div>
+<div class="paragraph">
+<p>Decoding a capture in ImHex shows the matching result: the <code>be u16 als_out</code>
+field comes back MSB-first as <code>0x00F0</code> (240)&#8201;&#8212;&#8201;the <code>0x00</code> MSB and the <code>0xF0</code>
+LSB are exactly the two data bytes clocked out in the waveform above.</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="images/imhex-regs-als-read.png" alt="ImHex Pattern Data view of the 16-bit als_out register read" width="900">
+</div>
+<div class="title">Figure 5. The 16-bit <code>als_out</code> read decoded MSB-first&#8201;&#8212;&#8201;<code>0x00F0</code> from registers <code>0x04-0x05</code> (the <code>0xF0</code> LSB clocked out last)</div>
+</div>
 </div>
 <div class="sect2">
 <h3 id="_overall_a_full_lifecycle">4.4. Overall: a full lifecycle</h3>
@@ -951,7 +937,7 @@ conversion, after which the device auto-returns to SLEEP.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-14 12:32:49 +0300
+Last updated 2026-06-14 15:38:08 +0300
 </div>
 </div>
 </body>

@@ -80,11 +80,11 @@ it. The Pattern Data view should now show, for this capture:
 * `als_th_low = 100`, `als_th_high = 800`
 * `cfg.als_en = 1`, plus the live `als_out` reading
 
-To capture a different state (e.g. the SLEEP baseline), disable the
+To capture a different state (e.g. the Continuousgit baseline), disable the
 consumer (`echo 0 > events/in_illuminance_thresh_either_en`) and repeat
 from Step 1.
 
-.ImHex decoding a register snapshot via `docs/imhex/envcombo-als.hexpat` -- here the SLEEP baseline (`pwr_mode = Sleep`, a 100/800 threshold window)
+.ImHex decoding a register snapshot via `docs/imhex/envcombo-als.hexpat` -- here the Continuous baseline (`pwr_mode = Continuous`, a 100/800 threshold window)
 image::images/imhex-regs-snapshot.png[ImHex Pattern Data view of the envcombo register dump,900]
 
 [NOTE]
@@ -111,12 +111,6 @@ Each bitfield register is wrapped in a small `Reg8<T>` union so the Pattern
 Data view shows the raw byte *and* the decoded fields together -- `cfg.raw`
 reads `0x84` next to `cfg.bits.als_en = 1`.
 ====
-
-.The `Reg8<CFG>` union in action -- `cfg.raw = 0x84` shown alongside the decoded bitfield (`als_en = 1`, `als_gain`, `als_time`)
-image::images/imhex-regs-cfg-write.png[ImHex Pattern Data view of the CFG register as raw byte plus decoded fields,900]
-
-.The `be u16 als_out` field decoded MSB-first -- the latched 16-bit ALS reading from registers `0x04-0x05`
-image::images/imhex-regs-als-read.png[ImHex Pattern Data view of the 16-bit als_out register read,900]
 
 == Graphing ALS samples
 
@@ -279,6 +273,14 @@ behind `envcombo_write_reg`, e.g. CFG (0x06) being set to 0x84 at probe.
 
 image::diagrams/svg/smbus-byte-write.svg[SMBus byte write timing diagram,900]
 
+Capturing the register file afterwards and decoding it in ImHex shows the
+result of exactly that write -- `cfg.raw = 0x84`, i.e. `als_en = 1` at the
+default gain x1 / 200 ms (the `Reg8<CFG>` union shows raw byte and decoded
+fields side by side):
+
+.The byte written above, decoded -- `cfg.raw = 0x84` alongside the bitfield (`als_en = 1`, `als_gain`, `als_time`)
+image::images/imhex-regs-cfg-write.png[ImHex Pattern Data view of the CFG register as raw byte plus decoded fields,900]
+
 A byte read is the read-modify path's other half: the driver first writes
 the register index, then issues a *repeated START* (`Sr`) and re-addresses
 the device for reading (`0x73`), so no STOP releases the bus in between.
@@ -307,6 +309,13 @@ master ACKs the first (MSB) to ask for more and NAKs the second (LSB) to
 end the transfer. This is `envcombo_read_reg16` reading ALS_OUT (0x04):
 
 image::diagrams/svg/smbus-word-read.svg[SMBus word read timing diagram,900]
+
+Decoding a capture in ImHex shows the matching result: the `be u16 als_out`
+field comes back MSB-first as `0x00F0` (240) -- the `0x00` MSB and the `0xF0`
+LSB are exactly the two data bytes clocked out in the waveform above.
+
+.The 16-bit `als_out` read decoded MSB-first -- `0x00F0` from registers `0x04-0x05` (the `0xF0` LSB clocked out last)
+image::images/imhex-regs-als-read.png[ImHex Pattern Data view of the 16-bit als_out register read,900]
 
 === Overall: a full lifecycle
 
