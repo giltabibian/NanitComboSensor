@@ -443,18 +443,24 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <div id="toc" class="toc">
 <div id="toctitle">Table of Contents</div>
 <ul class="sectlevel1">
-<li><a href="#_inspecting_register_state_with_imhex">1. Inspecting register state with ImHex</a>
+<li><a href="#_smbus_transaction_waveforms">1. SMBus transaction waveforms</a>
 <ul class="sectlevel2">
-<li><a href="#_step_1start_a_one_shot_listener_wsl2">1.1. Step 1&#8201;&#8212;&#8201;Start a one-shot listener (WSL2)</a></li>
-<li><a href="#_step_2set_thresholds_and_power_mode_guest">1.2. Step 2&#8201;&#8212;&#8201;Set thresholds and power mode (guest)</a></li>
-<li><a href="#_step_3dump_and_send_the_register_file_once">1.3. Step 3&#8201;&#8212;&#8201;Dump and send the register file once</a></li>
-<li><a href="#_step_4decode_in_imhex_windows">1.4. Step 4&#8201;&#8212;&#8201;Decode in ImHex (Windows)</a></li>
+<li><a href="#_byte_write_and_byte_read">1.1. Byte write and byte read</a></li>
+<li><a href="#_16_bit_word_accessand_why_swapped">1.2. 16-bit (word) access&#8201;&#8212;&#8201;and why "swapped"</a></li>
 </ul>
 </li>
-<li><a href="#_graphing_als_samples">2. Graphing ALS samples</a></li>
-<li><a href="#_full_records_with_timestamps">3. Full records with timestamps</a>
+<li><a href="#_inspecting_register_state_with_imhex">2. Inspecting register state with ImHex</a>
 <ul class="sectlevel2">
-<li><a href="#_reading_the_timestamp_nanoseconds_not_seconds">3.1. Reading the timestamp (nanoseconds, not seconds)</a></li>
+<li><a href="#_step_1start_a_one_shot_listener_wsl2">2.1. Step 1&#8201;&#8212;&#8201;Start a one-shot listener (WSL2)</a></li>
+<li><a href="#_step_2set_thresholds_and_power_mode_guest">2.2. Step 2&#8201;&#8212;&#8201;Set thresholds and power mode (guest)</a></li>
+<li><a href="#_step_3dump_and_send_the_register_file_once">2.3. Step 3&#8201;&#8212;&#8201;Dump and send the register file once</a></li>
+<li><a href="#_step_4decode_in_imhex_windows">2.4. Step 4&#8201;&#8212;&#8201;Decode in ImHex (Windows)</a></li>
+</ul>
+</li>
+<li><a href="#_graphing_als_samples">3. Graphing ALS samples</a></li>
+<li><a href="#_full_records_with_timestamps">4. Full records with timestamps</a>
+<ul class="sectlevel2">
+<li><a href="#_reading_the_timestamp_nanoseconds_not_seconds">4.1. Reading the timestamp (nanoseconds, not seconds)</a></li>
 </ul>
 </li>
 </ul>
@@ -482,7 +488,103 @@ Windows-visible path, then the guest sends it.</p>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_inspecting_register_state_with_imhex">1. Inspecting register state with ImHex</h2>
+<h2 id="_smbus_transaction_waveforms">1. SMBus transaction waveforms</h2>
+<div class="sectionbody">
+<div class="paragraph">
+<p>Before decoding the bytes at rest it helps to see them in motion. The
+driver never touches a bus directly&#8201;&#8212;&#8201;it issues four <code>i2c_smbus_*</code>
+primitives (<a href="../recipes-kernel/envcombo-driver/files/envcombo.c"><code>envcombo.c</code></a>,
+<code>envcombo_read_reg</code> / <code>write_reg</code> / <code>read_reg16</code> / <code>write_reg16</code>) and the
+kernel&#8217;s SMBus layer turns each into a START / address / command / data /
+STOP sequence on the wire. The device answers at 7-bit address <strong>0x39</strong>, so
+the address byte is <code>0x72</code> for a write (<code>0x39&lt;&lt;1</code>) and <code>0x73</code> for a read.</p>
+</div>
+<div class="admonitionblock note">
+<table>
+<tr>
+<td class="icon">
+<div class="title">Note</div>
+</td>
+<td class="content">
+<div class="paragraph">
+<p>These are <strong>idealized protocol timing diagrams</strong>, not captured traces. The
+"device" here is a software kernel module
+(<a href="../recipes-kernel/envcombo-sim/files/i2c-envcombo-sim.c"><code>i2c-envcombo-sim.c</code></a>)
+reached through Linux&#8217;s SMBus calls, so no physical SCL/SDA lines toggle
+and there is nothing to capture with a logic analyzer. The waveforms below
+are drawn from the SMBus spec to show the byte sequence each driver call
+generates; the <code>SCL</code> lane is a schematic clock, and the <code>Drives</code> lane marks
+which side&#8201;&#8212;&#8201;<strong>Master</strong> (driver) or <strong>Slave</strong> (device)&#8201;&#8212;&#8201;owns <code>SDA</code> in each
+phase.</p>
+</div>
+</td>
+</tr>
+</table>
+</div>
+<div class="sect2">
+<h3 id="_byte_write_and_byte_read">1.1. Byte write and byte read</h3>
+<div class="paragraph">
+<p>A single-register write puts the register index (the SMBus <strong>command</strong> byte)
+and one data byte after the write address, then stops. This is the path
+behind <code>envcombo_write_reg</code>, e.g. CFG (0x06) being set to 0x84 at probe.</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="diagrams/svg/smbus-byte-write.svg" alt="SMBus byte write timing diagram" width="900">
+</div>
+</div>
+<div class="paragraph">
+<p>A byte read is the read-modify path&#8217;s other half: the driver first writes
+the register index, then issues a <strong>repeated START</strong> (<code>Sr</code>) and re-addresses
+the device for reading (<code>0x73</code>), so no STOP releases the bus in between.
+The slave drives the one data byte and the master ends the transfer with a
+NAK. This is <code>envcombo_read_reg</code>&#8201;&#8212;&#8201;e.g. the WHO_AM_I (0x00) identity check
+at probe returning 0xEB.</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="diagrams/svg/smbus-byte-read.svg" alt="SMBus byte read timing diagram" width="900">
+</div>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_16_bit_word_accessand_why_swapped">1.2. 16-bit (word) access&#8201;&#8212;&#8201;and why "swapped"</h3>
+<div class="paragraph">
+<p>The ALS reading and both threshold registers are 16-bit fields the device
+stores <strong>big-endian</strong> (MSB at the lower address). The driver therefore uses
+the <code>i2c_smbus_*_word_swapped</code> variants, which put the high byte on the
+wire first&#8201;&#8212;&#8201;"swapped" relative to SMBus&#8217;s native little-endian word order.
+This is the wire-level reason the <code>docs/imhex/envcombo-als.hexpat</code> pattern
+decodes those fields MSB-first.</p>
+</div>
+<div class="paragraph">
+<p>A word write sends both data bytes (high then low) before the STOP&#8201;&#8212;&#8201;<code>envcombo_write_reg16</code>, e.g. ALS_TH_LOW (0x08) set to 100 (0x0064):</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="diagrams/svg/smbus-word-write.svg" alt="SMBus word write timing diagram" width="900">
+</div>
+</div>
+<div class="paragraph">
+<p>A word read mirrors the byte read but clocks out <strong>two</strong> data bytes: the
+master ACKs the first (MSB) to ask for more and NAKs the second (LSB) to
+end the transfer. This is <code>envcombo_read_reg16</code> reading ALS_OUT (0x04):</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="diagrams/svg/smbus-word-read.svg" alt="SMBus word read timing diagram" width="900">
+</div>
+</div>
+<div class="paragraph">
+<p>The four diagrams are PlantUML timing sources under <code>docs/diagrams/</code>
+(<code>smbus-*.puml</code>); regenerate their SVGs the same way as the other diagrams
+(<code>plantuml -tsvg -o svg docs/diagrams/*.puml</code>).</p>
+</div>
+</div>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_inspecting_register_state_with_imhex">2. Inspecting register state with ImHex</h2>
 <div class="sectionbody">
 <div class="paragraph">
 <p>The simulator exposes its full register file at
@@ -496,7 +598,7 @@ device state at a chosen moment.</p>
 known state.</p>
 </div>
 <div class="sect2">
-<h3 id="_step_1start_a_one_shot_listener_wsl2">1.1. Step 1&#8201;&#8212;&#8201;Start a one-shot listener (WSL2)</h3>
+<h3 id="_step_1start_a_one_shot_listener_wsl2">2.1. Step 1&#8201;&#8212;&#8201;Start a one-shot listener (WSL2)</h3>
 <div class="paragraph">
 <p>Accept a single connection and write it where Windows ImHex can open it:</p>
 </div>
@@ -507,7 +609,7 @@ known state.</p>
 </div>
 </div>
 <div class="sect2">
-<h3 id="_step_2set_thresholds_and_power_mode_guest">1.2. Step 2&#8201;&#8212;&#8201;Set thresholds and power mode (guest)</h3>
+<h3 id="_step_2set_thresholds_and_power_mode_guest">2.2. Step 2&#8201;&#8212;&#8201;Set thresholds and power mode (guest)</h3>
 <div class="paragraph">
 <p>Drive the device through its real sysfs ABI, so the change goes through
 the I2C write path and lands in the actual registers:</p>
@@ -529,7 +631,7 @@ echo 1 &gt; events/in_illuminance_thresh_either_en</code></pre>
 </div>
 </div>
 <div class="sect2">
-<h3 id="_step_3dump_and_send_the_register_file_once">1.3. Step 3&#8201;&#8212;&#8201;Dump and send the register file once</h3>
+<h3 id="_step_3dump_and_send_the_register_file_once">2.3. Step 3&#8201;&#8212;&#8201;Dump and send the register file once</h3>
 <div class="listingblock">
 <div class="content">
 <pre class="highlight"><code class="language-sh" data-lang="sh">nc 10.0.2.2 7777 &lt; /sys/kernel/debug/envcombo-sim/regs</code></pre>
@@ -541,7 +643,7 @@ holds the snapshot.</p>
 </div>
 </div>
 <div class="sect2">
-<h3 id="_step_4decode_in_imhex_windows">1.4. Step 4&#8201;&#8212;&#8201;Decode in ImHex (Windows)</h3>
+<h3 id="_step_4decode_in_imhex_windows">2.4. Step 4&#8201;&#8212;&#8201;Decode in ImHex (Windows)</h3>
 <div class="paragraph">
 <p>Open <code>C:\Users\&lt;windows-user&gt;\regs.bin</code>, load <code>docs/imhex/envcombo-als.hexpat</code>, and run
 it. The Pattern Data view should now show, for this capture:</p>
@@ -610,7 +712,7 @@ marking where.</p>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_graphing_als_samples">2. Graphing ALS samples</h2>
+<h2 id="_graphing_als_samples">3. Graphing ALS samples</h2>
 <div class="sectionbody">
 <div class="paragraph">
 <p>For a light-vs-time plot rather than a register snapshot, capture the
@@ -653,7 +755,7 @@ the simulator&#8217;s sawtooth ramp.</p>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_full_records_with_timestamps">3. Full records with timestamps</h2>
+<h2 id="_full_records_with_timestamps">4. Full records with timestamps</h2>
 <div class="sectionbody">
 <div class="paragraph">
 <p>To inspect samples together with their timestamps instead of plotting,
@@ -702,7 +804,7 @@ echo 0 &gt; buffer/enable</code></pre>
 <div class="title">Figure 3. ImHex decoding the 16-byte ALS records&#8201;&#8212;&#8201;<code>light</code>, padding, and the <code>s64</code> nanosecond timestamp per sample</div>
 </div>
 <div class="sect2">
-<h3 id="_reading_the_timestamp_nanoseconds_not_seconds">3.1. Reading the timestamp (nanoseconds, not seconds)</h3>
+<h3 id="_reading_the_timestamp_nanoseconds_not_seconds">4.1. Reading the timestamp (nanoseconds, not seconds)</h3>
 <div class="paragraph">
 <p>The driver stamps each record with <code>iio_get_time_ns()</code>, i.e. <strong>nanoseconds</strong>
 on the IIO device&#8217;s selected clock (<code>current_timestamp_clock</code>, default
@@ -740,7 +842,7 @@ view, so rely on that rather than the inspector rows.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-13 07:53:18 +0300
+Last updated 2026-06-14 11:11:28 +0300
 </div>
 </div>
 </body>

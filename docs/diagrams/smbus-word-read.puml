@@ -1,0 +1,56 @@
+@startuml smbus-word-read
+' SMBus word read, byte-swapped -- i2c_smbus_read_word_swapped(client, reg)
+' Example: ALS_MSB (0x04) -> 0x00F0 (240). MSB byte arrives first; the master
+' ACKs the first data byte and NAKs the second to end the read.
+title SMBus word read (byte-swapped / big-endian)\ni2c_smbus_read_word_swapped(0x39, reg=0x04) -> 0x00F0
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+scale 1 as 26 pixels
+
+clock SCL with period 2
+concise "Drives" as DRV
+robust "SDA" as SDA
+
+@0
+SDA is high
+DRV is "Master" #LightCyan
+@2
+SDA is "S" #Gold
+@4
+SDA is "ADDR 0x72  (W)"
+@6
+SDA is "ACK"
+DRV is "Slave" #Wheat
+@8
+SDA is "REG 0x04"
+DRV is "Master" #LightCyan
+@10
+SDA is "ACK"
+DRV is "Slave" #Wheat
+@12
+SDA is "Sr" #Gold
+DRV is "Master" #LightCyan
+@14
+SDA is "ADDR 0x73  (R)"
+@16
+SDA is "ACK"
+DRV is "Slave" #Wheat
+@18
+SDA is "0x00 (MSB)"
+@20
+SDA is "ACK"
+DRV is "Master" #LightCyan
+@22
+SDA is "0xF0 (LSB)"
+DRV is "Slave" #Wheat
+@24
+SDA is "NAK" #Gold
+DRV is "Master" #LightCyan
+@26
+SDA is "P" #Gold
+@28
+SDA is high
+@30
+
+highlight 2 to 26 #Honeydew : one transaction
+@enduml

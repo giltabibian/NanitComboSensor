@@ -1,0 +1,50 @@
+@startuml smbus-word-write
+' SMBus word write, byte-swapped -- i2c_smbus_write_word_swapped(client, reg, val)
+' Example: ALS_TH_LOW (0x08) <- 100 (0x0064). "swapped" = MSB sent first
+' (the device is big-endian), so 0x00 precedes 0x64 on the wire.
+title SMBus word write (byte-swapped / big-endian)\ni2c_smbus_write_word_swapped(0x39, reg=0x08, val=0x0064)
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+scale 1 as 30 pixels
+
+clock SCL with period 2
+concise "Drives" as DRV
+robust "SDA" as SDA
+
+@0
+SDA is high
+DRV is "Master" #LightCyan
+@2
+SDA is "S" #Gold
+@4
+SDA is "ADDR 0x72  (W)"
+@6
+SDA is "ACK"
+DRV is "Slave" #Wheat
+@8
+SDA is "REG 0x08"
+DRV is "Master" #LightCyan
+@10
+SDA is "ACK"
+DRV is "Slave" #Wheat
+@12
+SDA is "0x00 (MSB)"
+DRV is "Master" #LightCyan
+@14
+SDA is "ACK"
+DRV is "Slave" #Wheat
+@16
+SDA is "0x64 (LSB)"
+DRV is "Master" #LightCyan
+@18
+SDA is "ACK"
+DRV is "Slave" #Wheat
+@20
+SDA is "P" #Gold
+DRV is "Master" #LightCyan
+@22
+SDA is high
+@24
+
+highlight 2 to 20 #Honeydew : one transaction
+@enduml

@@ -1,0 +1,49 @@
+@startuml smbus-byte-read
+' SMBus byte read -- i2c_smbus_read_byte_data(client, reg)
+' Example: WHO_AM_I (0x00) -> 0xEB. Note the repeated START and R/W flip.
+title SMBus byte read\ni2c_smbus_read_byte_data(0x39, reg=0x00) -> 0xEB
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+scale 1 as 30 pixels
+
+clock SCL with period 2
+concise "Drives" as DRV
+robust "SDA" as SDA
+
+@0
+SDA is high
+DRV is "Master" #LightCyan
+@2
+SDA is "S" #Gold
+@4
+SDA is "ADDR 0x72  (W)"
+@6
+SDA is "ACK"
+DRV is "Slave" #Wheat
+@8
+SDA is "REG 0x00"
+DRV is "Master" #LightCyan
+@10
+SDA is "ACK"
+DRV is "Slave" #Wheat
+@12
+SDA is "Sr" #Gold
+DRV is "Master" #LightCyan
+@14
+SDA is "ADDR 0x73  (R)"
+@16
+SDA is "ACK"
+DRV is "Slave" #Wheat
+@18
+SDA is "DATA 0xEB"
+@20
+SDA is "NAK" #Gold
+DRV is "Master" #LightCyan
+@22
+SDA is "P" #Gold
+@24
+SDA is high
+@26
+
+highlight 2 to 22 #Honeydew : one transaction
+@enduml
