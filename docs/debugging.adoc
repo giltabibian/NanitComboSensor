@@ -2,6 +2,10 @@
 :toc:
 :toclevels: 2
 :sectnums:
+:docinfo: shared
+
+[.back-to-index]
+link:index.html[<- Back to documentation index]
 
 Host-side inspection of the device's binary interfaces: decoding the
 simulator's register file and captured ALS buffers with
