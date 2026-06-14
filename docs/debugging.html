@@ -604,11 +604,19 @@ sysfs path above and is not used here.</p>
 </td>
 <td class="content">
 <div class="paragraph">
-<p><code>docs/imhex/envcombo-als.hexpat</code> uses typed enums inside bitfields and LSB-first
-bitfield order, which is correct on current ImHex. If your build renders
-the CFG fields reversed (e.g. <code>als_en</code> landing in the low bits), add
-<code>#pragma bitfield_order right_to_left</code>&#8201;&#8212;&#8201;there is a comment in the file
-marking where.</p>
+<p><code>docs/imhex/envcombo-als.hexpat</code> is declared <code>#pragma endian little</code> so the
+bitfields fill LSB-first (first member = bit 0); the three 16-bit fields
+(<code>als_out</code> and the two thresholds) are MSB-first and are tagged <code>be</code>
+individually. This matters: under <code>#pragma endian big</code> ImHex 1.38.x fills
+bitfields <strong>MSB-first</strong>, which silently mis-decodes CFG/INT_CFG/STATUS&#8201;&#8212;&#8201;e.g.
+a CFG of <code>0x84</code> reads back <code>als_en = 0</code> instead of 1, with the set bits
+disappearing into the padding fields. If you see all-zero bitfield fields,
+that flipped endian is why.</p>
+</div>
+<div class="paragraph">
+<p>Each bitfield register is wrapped in a small <code>Reg8&lt;T&gt;</code> union so the Pattern
+Data view shows the raw byte <strong>and</strong> the decoded fields together&#8201;&#8212;&#8201;<code>cfg.raw</code>
+reads <code>0x84</code> next to <code>cfg.bits.als_en = 1</code>.</p>
 </div>
 </td>
 </tr>
@@ -903,7 +911,7 @@ conversion, after which the device auto-returns to SLEEP.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-14 11:41:40 +0300
+Last updated 2026-06-14 12:07:31 +0300
 </div>
 </div>
 </body>

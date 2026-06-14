@@ -94,11 +94,18 @@ sysfs path above and is not used here.
 
 [NOTE]
 ====
-`docs/imhex/envcombo-als.hexpat` uses typed enums inside bitfields and LSB-first
-bitfield order, which is correct on current ImHex. If your build renders
-the CFG fields reversed (e.g. `als_en` landing in the low bits), add
-`#pragma bitfield_order right_to_left` -- there is a comment in the file
-marking where.
+`docs/imhex/envcombo-als.hexpat` is declared `#pragma endian little` so the
+bitfields fill LSB-first (first member = bit 0); the three 16-bit fields
+(`als_out` and the two thresholds) are MSB-first and are tagged `be`
+individually. This matters: under `#pragma endian big` ImHex 1.38.x fills
+bitfields *MSB-first*, which silently mis-decodes CFG/INT_CFG/STATUS -- e.g.
+a CFG of `0x84` reads back `als_en = 0` instead of 1, with the set bits
+disappearing into the padding fields. If you see all-zero bitfield fields,
+that flipped endian is why.
+
+Each bitfield register is wrapped in a small `Reg8<T>` union so the Pattern
+Data view shows the raw byte *and* the decoded fields together -- `cfg.raw`
+reads `0x84` next to `cfg.bits.als_en = 1`.
 ====
 
 == Graphing ALS samples
