@@ -12,8 +12,10 @@
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
 #include <linux/jiffies.h>
+#include <linux/limits.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/time.h>
 
 #include <linux/iio/buffer.h>
 #include <linux/iio/events.h>
@@ -55,15 +57,16 @@
 
 static const int envcombo_als_gain_table[] = { 1, 4, 16, 64 };
 static const int envcombo_als_time_table_us[] = {
-	50000, 100000, 200000, 400000,
+	50 * USEC_PER_MSEC, 100 * USEC_PER_MSEC,
+	200 * USEC_PER_MSEC, 400 * USEC_PER_MSEC,
 };
 
 /* IIO_VAL_INT_PLUS_MICRO available list: (integer, micro) pairs */
 static const int envcombo_als_time_avail[] = {
-	0, 50000,
-	0, 100000,
-	0, 200000,
-	0, 400000,
+	0, 50 * USEC_PER_MSEC,
+	0, 100 * USEC_PER_MSEC,
+	0, 200 * USEC_PER_MSEC,
+	0, 400 * USEC_PER_MSEC,
 };
 
 /*
@@ -258,7 +261,7 @@ static int envcombo_read_raw(struct iio_dev *indio_dev,
 
 	case IIO_CHAN_INFO_INT_TIME:
 		*val = 0;
-		*val2 = data->calib_atime ? data->calib_atime * 1000 :
+		*val2 = data->calib_atime ? data->calib_atime * USEC_PER_MSEC :
 			envcombo_als_time_table_us[data->als_time_idx];
 		return IIO_VAL_INT_PLUS_MICRO;
 
@@ -401,7 +404,7 @@ static int envcombo_write_event_value(struct iio_dev *indio_dev,
 	struct envcombo_data *data = iio_priv(indio_dev);
 	int ret;
 
-	if (val < 0 || val > 0xFFFF)
+	if (val < 0 || val > U16_MAX)
 		return -EINVAL;
 
 	mutex_lock(&data->lock);
@@ -533,8 +536,9 @@ static irqreturn_t envcombo_irq_thread(int irq, void *private)
 	if (status & ENVCOMBO_STATUS_ALS_RDY) {
 		complete(&data->als_done);
 		/*
-		 * Threaded handler context: use the nested variant of
-		 * iio_trigger_poll(), which is reserved for hard-irq context.
+		 * Threaded (sleepable) context, so use
+		 * iio_trigger_poll_nested(); the plain iio_trigger_poll() is
+		 * for hard-irq context only.
 		 */
 		if (READ_ONCE(data->buffer_en))
 			iio_trigger_poll_nested(data->trig);
@@ -608,7 +612,7 @@ static int envcombo_probe(struct i2c_client *client)
 	data->calib_atime = ret;
 	if (data->calib_atime) {
 		data->calib_time_avail[0] = 0;
-		data->calib_time_avail[1] = data->calib_atime * 1000;
+		data->calib_time_avail[1] = data->calib_atime * USEC_PER_MSEC;
 		dev_warn(dev,
 			 "factory calibration overrides ALS integration time to %u ms; integration_time is read-only\n",
 			 data->calib_atime);
