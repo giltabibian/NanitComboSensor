@@ -207,8 +207,8 @@ anyway (STATUS is clear-on-read, ALS_OUT is hardware-latched).
 Hybrid power strategy (SLEEP / ONE-SHOT / CONTINUOUS)::
 Matches the power-on default (SLEEP) and keeps the device idle until
 userspace actually uses it -- no conversions, interrupts, or I2C traffic run
-while nothing is consuming ALS data -- correct resource use that also keeps
-the device in its hardware reset state until something needs it. Tradeoff:
+while nothing is consuming ALS data -- correct resource use that keeps the
+device in low-power SLEEP mode until something needs it. Tradeoff:
 more state tracking (two consumer flags +
 `envcombo_update_power_mode()`) than a naive "CONTINUOUS at probe" design,
 and the first raw read pays one conversion of latency (bounded by the 500 ms
