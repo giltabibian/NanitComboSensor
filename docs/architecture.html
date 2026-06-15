@@ -712,6 +712,14 @@ currently active consumers. Two boolean inputs drive the FSM: <code>buffer_en</c
 changes; ONE-SHOT is a transient state used only for on-demand raw reads
 while otherwise idle.</p>
 </div>
+<div class="paragraph">
+<p><code>PWR_MODE</code> is <strong>driver-derived, not a userspace knob</strong>: there is no sysfs
+attribute to set it. Userspace only toggles the standard IIO features&#8201;&#8212;&#8201;enabling/disabling the buffer (via <code>set_trigger_state</code>) and the threshold
+event (via <code>write_event_config</code>)&#8201;&#8212;&#8201;and the driver maps that combination to
+SLEEP or CONTINUOUS (CONTINUOUS while either is active, SLEEP once the last
+one is disabled). This keeps the power state always consistent with what is
+actually in use, which a directly-writable mode could not guarantee.</p>
+</div>
 <div class="imageblock">
 <div class="content">
 <img src="diagrams/svg/power-fsm.svg" alt="Power-mode state machine">
@@ -980,7 +988,7 @@ state to leave behind on unbind.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-15 13:49:57 +0300
+Last updated 2026-06-15 13:54:19 +0300
 </div>
 </div>
 </body>
