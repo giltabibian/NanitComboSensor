@@ -32,15 +32,22 @@ envcombo-test
 
 ## Documentation
 
-Full documentation lives in [`docs/`](docs/index.adoc) (rendered HTML
-alongside the sources):
+Full documentation lives in [`docs/`](docs/index.adoc), authored in AsciiDoc
+and rendered to HTML alongside the sources. The pages embed SVG diagrams,
+flow charts, and screenshots that GitHub's web view does not render reliably —
+**for the intended experience, clone the repo and open
+[`docs/index.html`](docs/index.html) in a browser.**
 
-1. [Architecture & Design](docs/architecture.adoc) — register map, driver
-   components, power FSM, usage flows, ABI, design decisions.
+1. [Architecture & Design](docs/architecture.adoc) — hardware/register map,
+   driver components and locking, the power-mode FSM, ALS usage flows, the
+   userspace ABI, and the design decisions with their tradeoffs.
 2. [Test Harness](docs/test-harness.adoc) — test plan, block diagram of the
-   harness/driver/simulator stack, per-test assertions.
+   harness/driver/simulator stack, and what each of the 15 tests asserts.
 3. [Installation, Build & Run](docs/user-guide.adoc) — every build, boot,
    and manual-verification command, step by step.
+4. [Manual Debugging & Binary Inspection](docs/debugging.adoc) — decoding the
+   device register file and captured ALS buffers with ImHex, reading
+   timestamped records, and the SMBus transaction timing diagrams.
 
 To re-render after editing (requires `asciidoctor` and `plantuml`):
 
