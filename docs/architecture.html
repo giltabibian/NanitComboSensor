@@ -877,11 +877,14 @@ anyway (STATUS is clear-on-read, ALS_OUT is hardware-latched).</p>
 </dd>
 <dt class="hdlist1">Hybrid power strategy (SLEEP / ONE-SHOT / CONTINUOUS)</dt>
 <dd>
-<p>Matches the power-on default (SLEEP) and only spends power while a consumer
-is active&#8201;&#8212;&#8201;the behavior expected of an ALS in a battery-powered product.
-Tradeoff: more state tracking (three flags + shared FSM helper) than a
-naive "CONTINUOUS at probe" design, and the first raw read pays one
-conversion of latency (bounded by the 500 ms completion timeout).</p>
+<p>Matches the power-on default (SLEEP) and keeps the device idle until
+userspace actually uses it&#8201;&#8212;&#8201;no conversions, interrupts, or I2C traffic run
+while nothing is consuming ALS data&#8201;&#8212;&#8201;correct resource use that also keeps
+the device in its hardware reset state until something needs it. Tradeoff:
+more state tracking (two consumer flags<br>
+<code>envcombo_update_power_mode()</code>) than a naive "CONTINUOUS at probe" design,
+and the first raw read pays one conversion of latency (bounded by the 500 ms
+completion timeout).</p>
 </dd>
 <dt class="hdlist1"><code>INT_LATCH=1</code></dt>
 <dd>
@@ -977,7 +980,7 @@ state to leave behind on unbind.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-14 20:06:03 +0300
+Last updated 2026-06-15 13:49:57 +0300
 </div>
 </div>
 </body>

@@ -120,6 +120,14 @@ currently active consumers. Two boolean inputs drive the FSM: `buffer_en`
 changes; ONE-SHOT is a transient state used only for on-demand raw reads
 while otherwise idle.
 
+`PWR_MODE` is *driver-derived, not a userspace knob*: there is no sysfs
+attribute to set it. Userspace only toggles the standard IIO features --
+enabling/disabling the buffer (via `set_trigger_state`) and the threshold
+event (via `write_event_config`) -- and the driver maps that combination to
+SLEEP or CONTINUOUS (CONTINUOUS while either is active, SLEEP once the last
+one is disabled). This keeps the power state always consistent with what is
+actually in use, which a directly-writable mode could not guarantee.
+
 image::diagrams/svg/power-fsm.svg[Power-mode state machine]
 
 While CONTINUOUS is active, a sysfs raw read skips the ONE-SHOT round-trip
@@ -197,11 +205,14 @@ out-of-tree module cannot do cleanly. Register caching would be wrong
 anyway (STATUS is clear-on-read, ALS_OUT is hardware-latched).
 
 Hybrid power strategy (SLEEP / ONE-SHOT / CONTINUOUS)::
-Matches the power-on default (SLEEP) and only spends power while a consumer
-is active -- the behavior expected of an ALS in a battery-powered product.
-Tradeoff: more state tracking (three flags + shared FSM helper) than a
-naive "CONTINUOUS at probe" design, and the first raw read pays one
-conversion of latency (bounded by the 500 ms completion timeout).
+Matches the power-on default (SLEEP) and keeps the device idle until
+userspace actually uses it -- no conversions, interrupts, or I2C traffic run
+while nothing is consuming ALS data -- correct resource use that also keeps
+the device in its hardware reset state until something needs it. Tradeoff:
+more state tracking (two consumer flags +
+`envcombo_update_power_mode()`) than a naive "CONTINUOUS at probe" design,
+and the first raw read pays one conversion of latency (bounded by the 500 ms
+completion timeout).
 
 `INT_LATCH=1`::
 With latching off, `ALS_INT` self-clears once the value returns in-range.
