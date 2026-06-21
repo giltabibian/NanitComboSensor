@@ -516,6 +516,22 @@ below follows the same pattern: a one-shot <code>nc</code> listener in WSL2 (whe
 guest&#8217;s slirp gateway <code>10.0.2.2</code> resolves) writes the blob to a
 Windows-visible path, then the guest sends it.</p>
 </div>
+<div class="admonitionblock tip">
+<table>
+<tr>
+<td class="icon">
+<div class="title">Tip</div>
+</td>
+<td class="content">
+<a href="envcombo-ctl.html">envcombo-ctl</a>'s Capture/Export tab automates
+this entire dance over SSH&#8201;&#8212;&#8201;one click writes <code>regs.bin</code> or a buffer
+capture straight to a local path, no listener required. The manual <code>nc</code>
+workflow below is still useful to understand what&#8217;s happening on the wire,
+or if SSH isn&#8217;t set up.
+</td>
+</tr>
+</table>
+</div>
 </div>
 </div>
 <div class="sect1">
@@ -964,7 +980,7 @@ conversion, after which the device auto-returns to SLEEP.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-21 09:51:15 +0300
+Last updated 2026-06-21 18:37:57 +0300
 </div>
 </div>
 </body>

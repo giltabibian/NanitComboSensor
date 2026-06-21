@@ -1,0 +1,185 @@
+= ENV-COMBO IIO Driver -- Host GUI (envcombo-ctl)
+:toc:
+:toclevels: 2
+:sectnums:
+:docinfo: shared
+
+[.back-to-index]
+link:index.html[<- Back to documentation index]
+
+`host-tools/envcombo-ctl/` is a host-side Rust/egui application that drives
+every sysfs/debugfs/chardev knob in link:architecture.html[the userspace
+ABI] through point-and-click widgets, over SSH. It is *not* part of the
+graded Yocto layer build -- `conf/layer.conf`'s `BBFILES` only globs
+`recipes-*/*/*.bb`, so this directory is invisible to bitbake; it's bonus
+tooling that runs on the development host while QEMU is up, replacing the
+manual `cat`/`echo`/`hexdump` shell dance (and the
+link:debugging.html[ImHex `nc`-listener dance]) with a live control panel.
+
+== Why SSH, not a window inside QEMU
+
+The image boots `nographic` (no framebuffer), so a real windowed GUI cannot
+run *inside* the guest -- it runs on the host and reaches the target over
+SSH instead. Two small additions make that possible:
+
+[cols="2,5", options="header"]
+|===
+| Addition | Purpose
+
+| `IMAGE_FEATURES += "ssh-server-dropbear"`
+  (`recipes-core/images/envcombo-image.bb`)
+| Adds a minimal SSH server to the image, consistent with
+  `core-image-minimal`'s footprint.
+
+| `DROPBEAR_EXTRA_ARGS = "-B"`
+| Allows the image's existing blank root password to keep working over SSH
+  -- dropbear refuses empty-password logins by default otherwise.
+
+| `recipes-utils/envcombo-evtcat/`
+| A tiny libc-only helper installed on the target. A plain shell can't
+  issue `IIO_GET_EVENT_FD_IOCTL`, so threshold events need this helper to
+  open the chardev's event fd and stream raw `iio_event_data` records to
+  stdout for the GUI to read over an SSH exec channel.
+|===
+
+== Source layout
+
+[cols="2,5", options="header"]
+|===
+| File | Role
+
+| `src/main.rs` | `eframe` entry point.
+| `src/ssh.rs` | Blocking `ssh2` transport: one-shot `exec_async` (fresh
+  connection per call, off the UI thread) and cancellable `start_stream`
+  (one connection held open for the duration of a live stream).
+| `src/abi.rs` | Sysfs/debugfs attribute paths, the simulator's register-map
+  decode, and the combined snapshot command + parser.
+| `src/app.rs` | The `eframe::App` -- connection state, the 1-second
+  auto-refresh poll, and the six tabs.
+|===
+
+== Connecting
+
+[source,shell]
+----
+runqemu qemuarm64 envcombo-image nographic slirp
+----
+
+The exact host-side forwarded SSH port depends on your `runqemu` setup
+(conventionally `2222 -> 22` with `slirp`); `envcombo-ctl`'s connection bar
+defaults to `localhost:2222` / user `root` / blank password, all editable.
+If the default doesn't connect, check runqemu's printed network
+configuration, or test manually first:
+
+[source,shell]
+----
+ssh root@localhost -p 2222   # should log in with no password prompt
+----
+
+== Building & running
+
+[source,shell]
+----
+cd host-tools/envcombo-ctl
+cargo build --release
+cargo run --release
+----
+
+Enter the host/port/user/password in the top bar and click *Connect*. On
+success the tool runs the same discovery the test harness uses
+(`grep -l envcombo /sys/bus/iio/devices/iio:device*/name`) to find the
+device, then starts a 1-second background poll of every read-only attribute
+(raw/scale/gain/integration time, thresholds, scan_elements, buffer state,
+and the simulator's debugfs register file) so every tab stays live without
+needing a manual refresh.
+
+== Tabs
+
+[cols="1,4", options="header"]
+|===
+| Tab | Covers
+
+| Channel
+| `in_illuminance_raw`/`_scale`, `hardwaregain` (+ `_available`),
+  `integration_time` (+ `_available`); the integration-time control is
+  disabled with an explanatory tooltip when the simulator's `CAL_ATIME`
+  factory override is active.
+
+| Events
+| `events/in_illuminance_thresh_{rising,falling}_value`,
+  `thresh_either_en`, and a live-scrolling event log fed by
+  `envcombo-evtcat` over a dedicated SSH channel.
+
+| Buffer
+| `scan_elements/in_illuminance_en` / `in_timestamp_en`, `buffer/length`,
+  `buffer/enable`, and a live light-vs-sample plot streamed from
+  `/dev/iio:deviceN` via `dd`.
+
+| State
+| Read-only PWR_MODE/STATUS/CFG/INT_CFG decode from the simulator's debugfs
+  register file -- never written, the same rule
+  link:debugging.html[the manual debugging workflow] and the test harness
+  follow.
+
+| Simulator
+| The full 19-byte debugfs register file as a labeled hex grid (including
+  the out-of-scope TEMP/HUMIDITY/CAL_TOFF/CAL_HOFF fields), for
+  side-by-side comparison with what link:debugging.html[ImHex] shows.
+
+| Capture / Export
+| One-click capture of the register snapshot or N buffer records straight
+  to a local `.bin` file (see below), plus `modprobe`/`rmmod` convenience
+  buttons for both modules.
+|===
+
+== Capture/Export: replacing the `nc` dance
+
+link:debugging.html[Manual Debugging & Binary Inspection] captures bytes
+for ImHex by starting a one-shot `nc` listener on the host and having the
+guest `nc` the blob out through the slirp gateway. With SSH available, the
+Capture/Export tab does the same job in one click: it pulls the bytes over
+the already-open SSH connection and writes them directly to a local
+directory (the *export directory* field -- point it at a Windows-visible
+path such as `/mnt/c/Users/<user>/` to open the result straight in ImHex,
+same as before).
+
+* *Save register snapshot* -- equivalent to
+  `hexdump -ve '1/1 "%02x"' /sys/kernel/debug/envcombo-sim/regs`, written
+  as `regs.bin`. Decode with `docs/imhex/envcombo-als.hexpat`.
+* *Capture buffer records* -- enables the buffer, captures exactly N
+  records at the current `scan_elements` configuration (2-byte light-only
+  or 16-byte light+timestamp), disables the buffer, and writes
+  `buffer_records.bin`. Decode with `docs/imhex/envcombo-als-plot.hexpat`
+  or `envcombo-als-records.hexpat` depending on which scan elements were
+  enabled. Capturing N records while `CONTINUOUS` takes roughly
+  `N * 200ms`, same as the manual `dd` workflow -- the GUI stays
+  responsive while it waits.
+
+== Troubleshooting
+
+[cols="3,5", options="header"]
+|===
+| Symptom | Check
+
+| Connect fails immediately
+| Confirm dropbear is reachable: `ssh root@localhost -p 2222` from the
+  host. If that also fails, check the actual forwarded port in runqemu's
+  startup output, or that the image was rebuilt after adding
+  `ssh-server-dropbear`.
+
+| Connected, but every tab says no device found
+| Both kernel modules need to be loaded first -- use the Capture/Export
+  tab's *modprobe* button, or `modprobe i2c-envcombo-sim && modprobe
+  envcombo` on the target.
+
+| Events tab never logs anything
+| `envcombo-evtcat` must be on the target's `PATH` (installed by the
+  `envcombo-evtcat` package); also confirm `thresh_either_en` is on and the
+  threshold window is actually crossable from the current raw value.
+
+| Buffer plot is flat or empty
+| `scan_elements/in_illuminance_en` must be on before clicking *Enable
+  buffer*; toggling `in_timestamp_en` while a stream is active doesn't
+  change the record size mid-stream -- stop and restart the plot after
+  changing it.
+|===

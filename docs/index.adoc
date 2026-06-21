@@ -40,6 +40,12 @@ provided device simulator and a Rust end-to-end test harness.
   `docs/imhex/` pattern files: capturing and field-decoding the simulator
   register file, plotting a captured ALS buffer, and reading full 16-byte
   records (including how the nanosecond timestamp is laid out and read).
+
+| link:envcombo-ctl.html[5. Host GUI (envcombo-ctl)]
+| A Rust/egui desktop app that drives the full driver ABI over SSH: live
+  channel/event/buffer control, a read-only simulator register view, and
+  one-click register/buffer capture for ImHex -- bonus tooling, not part of
+  the bitbake build.
 |===
 
 == Quick orientation
@@ -52,7 +58,9 @@ provided device simulator and a Rust end-to-end test harness.
 | `recipes-kernel/envcombo-sim/` | Provided bus/device simulator recipe + source
 | `recipes-kernel/linux/` | Kernel config fragment (IIO core, buffer, trigger)
 | `recipes-utils/envcombo-test/` | Rust test harness recipe + source
+| `recipes-utils/envcombo-evtcat/` | On-target event-fd helper for the host GUI
 | `recipes-core/images/envcombo-image.bb` | Test image (core-image-minimal + the above)
+| `host-tools/envcombo-ctl/` | Host-side GUI (not part of the bitbake build)
 | `conf/layer.conf` | Layer registration (scarthgap)
 | `docs/` | This documentation; PlantUML sources in `docs/diagrams/`
 |===

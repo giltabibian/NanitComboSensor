@@ -5,7 +5,7 @@
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="generator" content="Asciidoctor 2.0.16">
-<title>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Installation, Build &amp; Run</title>
+<title>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Host GUI (envcombo-ctl)</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Open+Sans:300,300italic,400,400italic,600,600italic%7CNoto+Serif:400,400italic,700,700italic%7CDroid+Sans+Mono:400,700">
 <style>
 /*! Asciidoctor default stylesheet | MIT License | https://asciidoctor.org */
@@ -465,34 +465,17 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </head>
 <body class="article">
 <div id="header">
-<h1>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Installation, Build &amp; Run</h1>
+<h1>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Host GUI (envcombo-ctl)</h1>
 <div id="toc" class="toc">
 <div id="toctitle">Table of Contents</div>
 <ul class="sectlevel1">
-<li><a href="#_prerequisites">1. Prerequisites</a></li>
-<li><a href="#_configuration_add_the_layer_and_configure_the_build">2. Configuration - add the layer and configure the build</a></li>
-<li><a href="#_build">3. Build</a>
-<ul class="sectlevel2">
-<li><a href="#_check_the_build_artifacts">3.1. Check the build artifacts</a></li>
-</ul>
-</li>
-<li><a href="#_boot_in_qemu">4. Boot in QEMU</a></li>
-<li><a href="#_ssh_access">5. SSH access</a></li>
-<li><a href="#_verify_the_modules_and_the_driver_bind">6. Verify the modules and the driver bind</a></li>
-<li><a href="#_exercise_the_driver_manually">7. Exercise the driver manually</a>
-<ul class="sectlevel2">
-<li><a href="#_on_demand_als_reads_one_shot">7.1. On-demand ALS reads (one-shot)</a></li>
-<li><a href="#_gain_and_integration_time">7.2. Gain and integration time</a></li>
-<li><a href="#_threshold_window">7.3. Threshold window</a></li>
-<li><a href="#_threshold_events">7.4. Threshold events</a></li>
-<li><a href="#_triggered_buffer_capture">7.5. Triggered buffer capture</a></li>
-<li><a href="#_power_mode_logic">7.6. Power-mode logic</a></li>
-<li><a href="#_inspect_raw_device_registers_simulator_debugfs">7.7. Inspect raw device registers (simulator debugfs)</a></li>
-</ul>
-</li>
-<li><a href="#_run_the_test_harness">8. Run the test harness</a></li>
-<li><a href="#_check_the_driver_coding_style">9. Check the driver coding style</a></li>
-<li><a href="#_troubleshooting">10. Troubleshooting</a></li>
+<li><a href="#_why_ssh_not_a_window_inside_qemu">1. Why SSH, not a window inside QEMU</a></li>
+<li><a href="#_source_layout">2. Source layout</a></li>
+<li><a href="#_connecting">3. Connecting</a></li>
+<li><a href="#_building_running">4. Building &amp; running</a></li>
+<li><a href="#_tabs">5. Tabs</a></li>
+<li><a href="#_captureexport_replacing_the_nc_dance">6. Capture/Export: replacing the <code>nc</code> dance</a></li>
+<li><a href="#_troubleshooting">7. Troubleshooting</a></li>
 </ul>
 </div>
 </div>
@@ -503,454 +486,234 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <p><a href="index.html">&#8592; Back to documentation index</a></p>
 </div>
 <div class="paragraph">
-<p>Host-side commands assume a Yocto 5.0 (scarthgap) checkout of poky; target-side commands run as root in the booted image (the default login, no password).</p>
+<p><code>host-tools/envcombo-ctl/</code> is a host-side Rust/egui application that drives
+every sysfs/debugfs/chardev knob in <a href="architecture.html">the userspace
+ABI</a> through point-and-click widgets, over SSH. It is <strong>not</strong> part of the
+graded Yocto layer build&#8201;&#8212;&#8201;<code>conf/layer.conf&#8217;s `BBFILES</code> only globs
+<code>recipes-<strong>/</strong>/*.bb</code>, so this directory is invisible to bitbake; it&#8217;s bonus
+tooling that runs on the development host while QEMU is up, replacing the
+manual <code>cat</code>/<code>echo</code>/<code>hexdump</code> shell dance (and the
+<a href="debugging.html">ImHex <code>nc</code>-listener dance</a>) with a live control panel.</p>
 </div>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_prerequisites">1. Prerequisites</h2>
+<h2 id="_why_ssh_not_a_window_inside_qemu">1. Why SSH, not a window inside QEMU</h2>
 <div class="sectionbody">
+<div class="paragraph">
+<p>The image boots <code>nographic</code> (no framebuffer), so a real windowed GUI cannot
+run <strong>inside</strong> the guest&#8201;&#8212;&#8201;it runs on the host and reaches the target over
+SSH instead. Two small additions make that possible:</p>
+</div>
+<table class="tableblock frame-all grid-all stretch">
+<colgroup>
+<col style="width: 28.5714%;">
+<col style="width: 71.4286%;">
+</colgroup>
+<thead>
+<tr>
+<th class="tableblock halign-left valign-top">Addition</th>
+<th class="tableblock halign-left valign-top">Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>IMAGE_FEATURES += "ssh-server-dropbear"</code>
+  (<code>recipes-core/images/envcombo-image.bb</code>)</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Adds a minimal SSH server to the image, consistent with
+  `core-image-minimal&#8217;s footprint.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>DROPBEAR_EXTRA_ARGS = "-B"</code></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Allows the image&#8217;s existing blank root password to keep working over SSH
+ &#8201;&#8212;&#8201;dropbear refuses empty-password logins by default otherwise.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>recipes-utils/envcombo-evtcat/</code></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">A tiny libc-only helper installed on the target. A plain shell can&#8217;t
+  issue <code>IIO_GET_EVENT_FD_IOCTL</code>, so threshold events need this helper to
+  open the chardev&#8217;s event fd and stream raw <code>iio_event_data</code> records to
+  stdout for the GUI to read over an SSH exec channel.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_source_layout">2. Source layout</h2>
+<div class="sectionbody">
+<table class="tableblock frame-all grid-all stretch">
+<colgroup>
+<col style="width: 28.5714%;">
+<col style="width: 71.4286%;">
+</colgroup>
+<thead>
+<tr>
+<th class="tableblock halign-left valign-top">File</th>
+<th class="tableblock halign-left valign-top">Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>src/main.rs</code></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>eframe</code> entry point.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>src/ssh.rs</code></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Blocking <code>ssh2</code> transport: one-shot <code>exec_async</code> (fresh
+  connection per call, off the UI thread) and cancellable <code>start_stream</code>
+  (one connection held open for the duration of a live stream).</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>src/abi.rs</code></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Sysfs/debugfs attribute paths, the simulator&#8217;s register-map
+  decode, and the combined snapshot command + parser.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>src/app.rs</code></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">The <code>eframe::App</code>&#8201;&#8212;&#8201;connection state, the 1-second
+  auto-refresh poll, and the six tabs.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_connecting">3. Connecting</h2>
+<div class="sectionbody">
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-shell" data-lang="shell">runqemu qemuarm64 envcombo-image nographic slirp</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>The exact host-side forwarded SSH port depends on your <code>runqemu</code> setup
+(conventionally <code>2222 &#8594; 22</code> with <code>slirp</code>); <code>envcombo-ctl&#8217;s connection bar
+defaults to `localhost:2222</code> / user <code>root</code> / blank password, all editable.
+If the default doesn&#8217;t connect, check runqemu&#8217;s printed network
+configuration, or test manually first:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-shell" data-lang="shell">ssh root@localhost -p 2222   # should log in with no password prompt</code></pre>
+</div>
+</div>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_building_running">4. Building &amp; running</h2>
+<div class="sectionbody">
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-shell" data-lang="shell">cd host-tools/envcombo-ctl
+cargo build --release
+cargo run --release</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>Enter the host/port/user/password in the top bar and click <strong>Connect</strong>. On
+success the tool runs the same discovery the test harness uses
+(<code>grep -l envcombo /sys/bus/iio/devices/iio:device*/name</code>) to find the
+device, then starts a 1-second background poll of every read-only attribute
+(raw/scale/gain/integration time, thresholds, scan_elements, buffer state,
+and the simulator&#8217;s debugfs register file) so every tab stays live without
+needing a manual refresh.</p>
+</div>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_tabs">5. Tabs</h2>
+<div class="sectionbody">
+<table class="tableblock frame-all grid-all stretch">
+<colgroup>
+<col style="width: 20%;">
+<col style="width: 80%;">
+</colgroup>
+<thead>
+<tr>
+<th class="tableblock halign-left valign-top">Tab</th>
+<th class="tableblock halign-left valign-top">Covers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Channel</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>in_illuminance_raw</code>/<code>_scale</code>, <code>hardwaregain</code> (+ <code>_available</code>),
+  <code>integration_time</code> (+ <code>_available</code>); the integration-time control is
+  disabled with an explanatory tooltip when the simulator&#8217;s <code>CAL_ATIME</code>
+  factory override is active.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Events</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>events/in_illuminance_thresh_{rising,falling}_value</code>,
+  <code>thresh_either_en</code>, and a live-scrolling event log fed by
+  <code>envcombo-evtcat</code> over a dedicated SSH channel.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Buffer</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>scan_elements/in_illuminance_en</code> / <code>in_timestamp_en</code>, <code>buffer/length</code>,
+  <code>buffer/enable</code>, and a live light-vs-sample plot streamed from
+  <code>/dev/iio:deviceN</code> via <code>dd</code>.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">State</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Read-only PWR_MODE/STATUS/CFG/INT_CFG decode from the simulator&#8217;s debugfs
+  register file&#8201;&#8212;&#8201;never written, the same rule
+  <a href="debugging.html">the manual debugging workflow</a> and the test harness
+  follow.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Simulator</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">The full 19-byte debugfs register file as a labeled hex grid (including
+  the out-of-scope TEMP/HUMIDITY/CAL_TOFF/CAL_HOFF fields), for
+  side-by-side comparison with what <a href="debugging.html">ImHex</a> shows.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Capture / Export</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">One-click capture of the register snapshot or N buffer records straight
+  to a local <code>.bin</code> file (see below), plus <code>modprobe</code>/<code>rmmod</code> convenience
+  buttons for both modules.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_captureexport_replacing_the_nc_dance">6. Capture/Export: replacing the <code>nc</code> dance</h2>
+<div class="sectionbody">
+<div class="paragraph">
+<p><a href="debugging.html">Manual Debugging &amp; Binary Inspection</a> captures bytes
+for ImHex by starting a one-shot <code>nc</code> listener on the host and having the
+guest <code>nc</code> the blob out through the slirp gateway. With SSH available, the
+Capture/Export tab does the same job in one click: it pulls the bytes over
+the already-open SSH connection and writes them directly to a local
+directory (the <strong>export directory</strong> field&#8201;&#8212;&#8201;point it at a Windows-visible
+path such as <code>/mnt/c/Users/&lt;user&gt;/</code> to open the result straight in ImHex,
+same as before).</p>
+</div>
 <div class="ulist">
 <ul>
 <li>
-<p>poky, scarthgap branch (<code>git clone -b scarthgap git://git.yoctoproject.org/poky</code>)</p>
+<p><strong>Save register snapshot</strong>&#8201;&#8212;&#8201;equivalent to
+<code>hexdump -ve '1/1 "%02x"' /sys/kernel/debug/envcombo-sim/regs</code>, written
+as <code>regs.bin</code>. Decode with <code>docs/imhex/envcombo-als.hexpat</code>.</p>
 </li>
 <li>
-<p>checked out to the <code>yocto-5.0.18</code> tag</p>
-</li>
-<li>
-<p>The usual Yocto host packages for your distro</p>
-</li>
-<li>
-<p>This repository checked out next to (or anywhere relative to) poky</p>
+<p><strong>Capture buffer records</strong>&#8201;&#8212;&#8201;enables the buffer, captures exactly N
+records at the current <code>scan_elements</code> configuration (2-byte light-only
+or 16-byte light+timestamp), disables the buffer, and writes
+<code>buffer_records.bin</code>. Decode with <code>docs/imhex/envcombo-als-plot.hexpat</code>
+or <code>envcombo-als-records.hexpat</code> depending on which scan elements were
+enabled. Capturing N records while <code>CONTINUOUS</code> takes roughly
+<code>N * 200ms</code>, same as the manual <code>dd</code> workflow&#8201;&#8212;&#8201;the GUI stays
+responsive while it waits.</p>
 </li>
 </ul>
 </div>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_configuration_add_the_layer_and_configure_the_build">2. Configuration - add the layer and configure the build</h2>
-<div class="sectionbody">
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">cd poky
-source oe-init-build-env build-qemu-arm64        # creates/enters the build dir
-
-# Update MACHINE in conf/local.conf to build for QEMU's 64-bit ARM platform
-# MACHINE = "qemuarm64"
-
-# register the layer:
-bitbake-layers add-layer /path/to/NanitComboSensor
-bitbake-layers show-layers                        # meta-nanit-envcombo must be listed</code></pre>
-</div>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_build">3. Build</h2>
-<div class="sectionbody">
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">bitbake envcombo-image                            # full test image (recommended)
-
-# or individual pieces:
-bitbake envcombo-driver                           # driver module only
-bitbake envcombo-sim                              # simulator module only
-bitbake envcombo-test                             # Rust test harness only
-bitbake virtual/kernel                            # kernel with the IIO fragment</code></pre>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_check_the_build_artifacts">3.1. Check the build artifacts</h3>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell"># deployed image + kernel:
-ls tmp/deploy/images/qemuarm64/envcombo-image-qemuarm64.rootfs.ext4 \
-   tmp/deploy/images/qemuarm64/Image
-
-# everything envcombo-related made it into the image:
-grep -E 'envcombo' tmp/deploy/images/qemuarm64/envcombo-image-qemuarm64.rootfs.manifest
-# expect: envcombo-driver, envcombo-sim, envcombo-test,
-#         kernel-module-envcombo-*, kernel-module-i2c-envcombo-sim-*
-
-# kernel config fragment was applied:
-grep -E 'CONFIG_IIO(_BUFFER|_TRIGGER|_TRIGGERED_BUFFER|_KFIFO_BUF)?=' \
-    tmp/work/qemuarm64-poky-linux/linux-yocto/*/linux-qemuarm64-standard-build/.config
-
-# compiled module objects:
-ls tmp/work/qemuarm64-poky-linux/envcombo-driver/1.0/envcombo.ko \
-   tmp/work/qemuarm64-poky-linux/envcombo-sim/1.0/i2c-envcombo-sim.ko</code></pre>
-</div>
-</div>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_boot_in_qemu">4. Boot in QEMU</h2>
-<div class="sectionbody">
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">runqemu qemuarm64 envcombo-image nographic slirp
-
-# if runqemu cannot resolve the image by name, point it at the qemuboot file:
-runqemu tmp/deploy/images/qemuarm64/envcombo-image-qemuarm64.rootfs.qemuboot.conf nographic slirp
-
-# add "snapshot" to keep the rootfs pristine across runs; exit QEMU with Ctrl-A x</code></pre>
-</div>
-</div>
-<div class="paragraph">
-<p>Log in as <code>root</code> (no password).</p>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_ssh_access">5. SSH access</h2>
-<div class="sectionbody">
-<div class="paragraph">
-<p>The image includes a dropbear SSH server (<code>IMAGE_FEATURES +=
-"ssh-server-dropbear"</code>, with <code>DROPBEAR_EXTRA_ARGS = "-B"</code> so the blank root
-password also works over SSH). With <code>slirp</code> networking this is reachable
-from the host, conventionally at <code>localhost:2222</code>:</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">ssh root@localhost -p 2222</code></pre>
-</div>
-</div>
-<div class="paragraph">
-<p>If that port doesn&#8217;t connect, check the network configuration <code>runqemu</code>
-printed at startup&#8201;&#8212;&#8201;the exact forwarded port depends on the local
-<code>runqemu</code> setup. SSH access is what lets
-<a href="envcombo-ctl.html">envcombo-ctl</a>, a host-side GUI for the whole driver
-ABI, reach the target; see that page for setup and a tour of what it can
-do.</p>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_verify_the_modules_and_the_driver_bind">6. Verify the modules and the driver bind</h2>
-<div class="sectionbody">
-<div class="paragraph">
-<p>Both modules autoload at boot (<code>/etc/modules-load.d/</code>). To check:</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">lsmod | grep -E 'envcombo|i2c_envcombo_sim'
-dmesg | grep -E 'envcombo'
-# expect: "envcombo-sim: adapter #N, device at 0x39, irq M"
-
-# the bound i2c client and its driver:
-ls /sys/bus/i2c/devices/                          # e.g. 0-0039
-cat /sys/bus/i2c/devices/*-0039/name              # envcombo
-readlink /sys/bus/i2c/devices/*-0039/driver       # -&gt; .../drivers/envcombo
-
-# the IIO device and trigger:
-grep -r . /sys/bus/iio/devices/iio:device0/name   # envcombo
-cat /sys/bus/iio/devices/trigger0/name            # envcombo-dev0
-ls /dev/iio:device0</code></pre>
-</div>
-</div>
-<div class="paragraph">
-<p>Manual load/unload (e.g. after testing or to re-probe):</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">rmmod i2c_envcombo_sim &amp;&amp; rmmod envcombo
-modprobe i2c-envcombo-sim &amp;&amp; modprobe envcombo
-dmesg | tail</code></pre>
-</div>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_exercise_the_driver_manually">7. Exercise the driver manually</h2>
-<div class="sectionbody">
-<div class="paragraph">
-<p><strong>All paths below are relative to the IIO device directory&#8201;&#8212;&#8201;run this
-first:</strong></p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">cd /sys/bus/iio/devices/iio:device0</code></pre>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_on_demand_als_reads_one_shot">7.1. On-demand ALS reads (one-shot)</h3>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">cat in_illuminance_raw        # runs a one-shot conversion (device sleeps after)
-cat in_illuminance_scale      # 1/(gain x calib_gain); raw * scale = illuminance</code></pre>
-</div>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_gain_and_integration_time">7.2. Gain and integration time</h3>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">cat in_illuminance_hardwaregain_available         # 1 4 16 64
-echo 16 &gt; in_illuminance_hardwaregain
-cat in_illuminance_hardwaregain                   # 16
-cat in_illuminance_scale                          # 0.0625 (= 1/16)
-echo 3 &gt; in_illuminance_hardwaregain              # write error: Invalid argument
-
-cat in_illuminance_integration_time_available     # 0.050000 0.100000 0.200000 0.400000
-echo 0.4 &gt; in_illuminance_integration_time
-cat in_illuminance_integration_time               # 0.400000</code></pre>
-</div>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_threshold_window">7.3. Threshold window</h3>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell"># window [100, 800]; write falling first so the window stays well-formed:
-echo 100  &gt; events/in_illuminance_thresh_falling_value
-echo 800 &gt; events/in_illuminance_thresh_rising_value
-cat events/in_illuminance_thresh_*_value
-
-echo 10  &gt; events/in_illuminance_thresh_rising_value   # rejected (&lt; falling)</code></pre>
-</div>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_threshold_events">7.4. Threshold events</h3>
-<div class="paragraph">
-<p>Enabling the event powers the device into CONTINUOUS; a crossing out of the
-window delivers an <code>IIO_EV_DIR_EITHER</code> event on the chardev&#8217;s event fd.
-Reading the event stream needs the <code>IIO_GET_EVENT_FD_IOCTL</code> ioctl, which a
-plain shell cannot issue&#8201;&#8212;&#8201;use the test harness (test 5) or
-<code>iio_event_monitor /dev/iio:device0</code> if you add <code>libiio</code> to the image. The
-enable/power side is fully checkable from the shell:</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">echo 1 &gt; events/in_illuminance_thresh_either_en
-cat events/in_illuminance_thresh_either_en        # 1
-# device register check -- PWR_MODE (offset 0x12) == 03 (CONTINUOUS):
-hexdump -C /sys/kernel/debug/envcombo-sim/regs
-
-echo 0 &gt; events/in_illuminance_thresh_either_en   # back to SLEEP (01)</code></pre>
-</div>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_triggered_buffer_capture">7.5. Triggered buffer capture</h3>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">echo 1 &gt; scan_elements/in_illuminance_en
-echo 1 &gt; scan_elements/in_timestamp_en
-cat trigger/current_trigger 2&gt;/dev/null
-echo envcombo-dev0 &gt; trigger/current_trigger
-echo 64 &gt; buffer/length
-echo 1 &gt; buffer/enable
-
-# one 16-byte record per 200 ms: [u16 light][6B pad][s64 timestamp]
-hexdump -e '1/2 "light=%5u " 6/1 "%02x " 1/4 " ts_lo=%u " 1/4 "ts_hi=%u\n"' -n 160 /dev/iio:device0
-
-echo 0 &gt; buffer/enable
-echo 0 &gt; scan_elements/in_illuminance_en
-echo 0 &gt; scan_elements/in_timestamp_en</code></pre>
-</div>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_power_mode_logic">7.6. Power-mode logic</h3>
-<div class="paragraph">
-<p>The driver never exposes <code>PWR_MODE</code> as a writable sysfs attribute. Instead it
-derives the target mode from two consumer flags and updates the register
-automatically:</p>
-</div>
-<table class="tableblock frame-all grid-all stretch">
-<colgroup>
-<col style="width: 25%;">
-<col style="width: 25%;">
-<col style="width: 50%;">
-</colgroup>
-<thead>
-<tr>
-<th class="tableblock halign-left valign-top"><code>buffer/enable</code></th>
-<th class="tableblock halign-left valign-top"><code>thresh_either_en</code></th>
-<th class="tableblock halign-left valign-top">Resulting PWR_MODE</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><strong>SLEEP</strong> (no conversions; raw reads trigger a transient ONE-SHOT)</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">1</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><strong>CONTINUOUS</strong> (buffer active)</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">1</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><strong>CONTINUOUS</strong> (event monitoring active)</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">1</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">1</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><strong>CONTINUOUS</strong> (both active)</p></td>
-</tr>
-</tbody>
-</table>
-<div class="paragraph">
-<p>ONE-SHOT is a transient state used only for on-demand raw reads while both
-consumers are off: the driver writes <code>PWR_MODE=ONE-SHOT</code>, waits for the
-data-ready interrupt (up to 500 ms), reads ALS_OUT, and the device returns to
-SLEEP automatically.</p>
-</div>
-<div class="paragraph">
-<p>While CONTINUOUS is already active (either consumer on), a raw read skips the
-ONE-SHOT round-trip and returns the most recent latched value directly.</p>
-</div>
-<div class="paragraph">
-<p>To verify the current power mode from the shell:</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell"># PWR_MODE is at offset 0x12: 0x01 = SLEEP, 0x02 = ONE-SHOT, 0x03 = CONTINUOUS
-hexdump -C /sys/kernel/debug/envcombo-sim/regs | grep "00000010"</code></pre>
-</div>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_inspect_raw_device_registers_simulator_debugfs">7.7. Inspect raw device registers (simulator debugfs)</h3>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">mount -t debugfs debugfs /sys/kernel/debug 2&gt;/dev/null
-hexdump -C /sys/kernel/debug/envcombo-sim/regs
-# offsets: 0x06 CFG, 0x08/0x0A TH_LOW/TH_HIGH (big-endian pairs),
-#          0x10 CAL_AGAIN, 0x11 CAL_ATIME, 0x12 PWR_MODE (01=SLEEP, 03=CONT)</code></pre>
-</div>
-</div>
-<div class="paragraph">
-<p>The file is also writable at the same offsets, e.g. to simulate a factory
-integration-time override (<code>CAL_ATIME</code>, offset 0x11) before re-probing the
-driver:</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">printf '\x64' | dd of=/sys/kernel/debug/envcombo-sim/regs bs=1 seek=17 conv=notrunc
-rmmod envcombo &amp;&amp; modprobe envcombo
-dmesg | tail -1     # "factory calibration overrides ALS integration time to 100 ms..."</code></pre>
-</div>
-</div>
-<div class="admonitionblock tip">
-<table>
-<tr>
-<td class="icon">
-<div class="title">Tip</div>
-</td>
-<td class="content">
-For field-by-field decoding of the register file and captured ALS
-buffers with ImHex (register snapshots, light-vs-time plots, and full
-records with timestamps), see <a href="debugging.html">Manual Debugging &amp;
-Binary Inspection</a>.
-</td>
-</tr>
-</table>
-</div>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_run_the_test_harness">8. Run the test harness</h2>
-<div class="sectionbody">
-<div class="paragraph">
-<p>The harness is self-contained: module-loading reloads both modules for a
-clean slate and every device test rebaselines first, so it can be run at any
-time (including right after the manual section above) without a reboot.</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">envcombo-test
-echo $?             # 0 = all passed, 1 = at least one failure</code></pre>
-</div>
-</div>
-<div class="paragraph">
-<p>Expected output:</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre>envcombo driver test harness (15 tests, seed 4675903481288702464)
-[1/15] module-loading               PASS
-[2/15] direct-als-read              PASS
-[3/15] gain-and-integration-time    PASS
-[4/15] gain-response                PASS
-[5/15] time-response                PASS
-[6/15] factory-gain-cal             PASS
-[7/15] factory-atime-override       PASS
-[8/15] threshold-attributes         PASS
-[9/15] threshold-events             PASS
-[10/15] triggered-buffer            PASS
-[11/15] buffer-no-timestamp         PASS
-[12/15] buffer-timestamp-accuracy   PASS
-[13/15] power-fsm-transitions       PASS
-[14/15] module-unloading            PASS
-[15/15] kernel-log-health           PASS
-RESULT: all 15 tests passed (seed 4675903481288702464)</pre>
-</div>
-</div>
-<div class="paragraph">
-<p>The device tests run in a seeded random order each time to prove they are
-order-independent (the seed is printed so a failing order can be replayed).
-See <a href="test-harness.html">the test harness page</a> for the per-test
-assertions, the ordering rules, and how to replay a seed. After a run,
-<code>dmesg | tail -20</code> should show only the clean unload/reload messages from
-module-loading and module-unloading.</p>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_check_the_driver_coding_style">9. Check the driver coding style</h2>
-<div class="sectionbody">
-<div class="paragraph">
-<p>The driver follows the Linux kernel coding style. Verify it with the
-kernel&#8217;s own <code>checkpatch.pl</code>. If you don&#8217;t have a kernel tree handy, fetch
-the standalone script (plus its optional data files) and run it in file mode:</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell"># fetch checkpatch and its optional data files:
-curl -fsSL -o /tmp/checkpatch.pl \
-    https://raw.githubusercontent.com/torvalds/linux/master/scripts/checkpatch.pl
-curl -fsSL -o /tmp/spelling.txt \
-    https://raw.githubusercontent.com/torvalds/linux/master/scripts/spelling.txt
-curl -fsSL -o /tmp/const_structs.checkpatch \
-    https://raw.githubusercontent.com/torvalds/linux/master/scripts/const_structs.checkpatch
-
-# check the driver source (file mode, no kernel tree, strict checks):
-perl /tmp/checkpatch.pl --no-tree --strict -f \
-    recipes-kernel/envcombo-driver/files/envcombo.c
-# expect: "total: 0 errors, 0 warnings, 0 checks"</code></pre>
-</div>
-</div>
-<div class="paragraph">
-<p><code>--no-tree</code> runs standalone, <code>--strict</code> enables the stricter <code>CHECK:</code>-level
-tests, and <code>-f</code> checks an existing file instead of a patch. Add <code>--terse</code> for
-one line per finding.</p>
-</div>
-<div class="admonitionblock note">
-<table>
-<tr>
-<td class="icon">
-<div class="title">Note</div>
-</td>
-<td class="content">
-checkpatch only validates the first wrapped line of a multi-line
-statement against the opening parenthesis, so it does not catch alignment
-drift on the second and later continuation lines&#8201;&#8212;&#8201;review those by eye.
-</td>
-</tr>
-</table>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_troubleshooting">10. Troubleshooting</h2>
+<h2 id="_troubleshooting">7. Troubleshooting</h2>
 <div class="sectionbody">
 <table class="tableblock frame-all grid-all stretch">
 <colgroup>
@@ -965,29 +728,30 @@ drift on the second and later continuation lines&#8201;&#8212;&#8201;review thos
 </thead>
 <tbody>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">No <code>iio:device0</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>lsmod</code> for both modules; <code>dmesg | grep envcombo</code> for probe errors
-  (WHO_AM_I mismatch returns <code>-ENODEV</code>, missing IRQ returns <code>-EINVAL</code>).</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Connect fails immediately</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Confirm dropbear is reachable: <code>ssh root@localhost -p 2222</code> from the
+  host. If that also fails, check the actual forwarded port in runqemu&#8217;s
+  startup output, or that the image was rebuilt after adding
+  <code>ssh-server-dropbear</code>.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>in_illuminance_raw</code> returns <code>Connection timed out</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">The one-shot completion timed out (500 ms): the interrupt path is broken.
-  <code>cat /proc/interrupts | grep envcombo</code> should increment on each read.</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Connected, but every tab says no device found</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Both kernel modules need to be loaded first&#8201;&#8212;&#8201;use the Capture/Export
+  tab&#8217;s <strong>modprobe</strong> button, or <code>modprobe i2c-envcombo-sim &amp;&amp; modprobe
+  envcombo</code> on the target.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Buffer delivers nothing</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>cat trigger/current_trigger</code> must be <code>envcombo-dev0</code>;
-  <code>scan_elements/in_illuminance_en</code> must be 1 before <code>buffer/enable</code>.</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Events tab never logs anything</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>envcombo-evtcat</code> must be on the target&#8217;s <code>PATH</code> (installed by the
+  <code>envcombo-evtcat</code> package); also confirm <code>thresh_either_en</code> is on and the
+  threshold window is actually crossable from the current raw value.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>integration_time</code> write fails with <code>Operation not supported</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>CAL_ATIME</code> factory override is active&#8201;&#8212;&#8201;expected behavior; see the
-  probe-time <code>dev_warn</code> in dmesg.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Harness FAIL lines</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">The message states observation vs. expectation; start from the first
-  failing test (later ones may cascade from it).</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Buffer plot is flat or empty</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>scan_elements/in_illuminance_en</code> must be on before clicking <strong>Enable
+  buffer</strong>; toggling <code>in_timestamp_en</code> while a stream is active doesn&#8217;t
+  change the record size mid-stream&#8201;&#8212;&#8201;stop and restart the plot after
+  changing it.</p></td>
 </tr>
 </tbody>
 </table>
@@ -996,7 +760,7 @@ drift on the second and later continuation lines&#8201;&#8212;&#8201;review thos
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-21 18:37:47 +0300
+Last updated 2026-06-21 18:37:25 +0300
 </div>
 </div>
 </body>

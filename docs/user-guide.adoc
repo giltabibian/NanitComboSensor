@@ -80,6 +80,25 @@ runqemu tmp/deploy/images/qemuarm64/envcombo-image-qemuarm64.rootfs.qemuboot.con
 
 Log in as `root` (no password).
 
+== SSH access
+
+The image includes a dropbear SSH server (`IMAGE_FEATURES +=
+"ssh-server-dropbear"`, with `DROPBEAR_EXTRA_ARGS = "-B"` so the blank root
+password also works over SSH). With `slirp` networking this is reachable
+from the host, conventionally at `localhost:2222`:
+
+[source,shell]
+----
+ssh root@localhost -p 2222
+----
+
+If that port doesn't connect, check the network configuration `runqemu`
+printed at startup -- the exact forwarded port depends on the local
+`runqemu` setup. SSH access is what lets
+link:envcombo-ctl.html[envcombo-ctl], a host-side GUI for the whole driver
+ABI, reach the target; see that page for setup and a tour of what it can
+do.
+
 == Verify the modules and the driver bind
 
 Both modules autoload at boot (`/etc/modules-load.d/`). To check:

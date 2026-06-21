@@ -51,6 +51,10 @@ flow charts, and screenshots that GitHub's web view does not render reliably —
 4. [Manual Debugging & Binary Inspection](docs/debugging.adoc) — decoding the
    device register file and captured ALS buffers with ImHex, reading
    timestamped records, and the SMBus transaction timing diagrams.
+5. [Host GUI (envcombo-ctl)](docs/envcombo-ctl.adoc) — a Rust/egui desktop
+   app, run on the host, that drives the full driver ABI over SSH: live
+   channel/event/buffer control plus one-click register/buffer capture for
+   ImHex. Bonus tooling, not part of the bitbake build.
 
 To re-render after editing (requires `asciidoctor` and `plantuml`):
 
@@ -69,8 +73,9 @@ meta-nanit-envcombo/
 │   ├── envcombo-sim/             # I2C bus & device simulator (provided)
 │   └── linux/                    # Kernel config fragment
 ├── recipes-core/images/
-│   └── envcombo-image.bb         # Image recipe
-└── recipes-utils/envcombo-test/
-    ├── envcombo-test_0.1.0.bb    # Test harness recipe (Rust/Cargo)
-    └── files/envcombo-test/      # Test harness source
+│   └── envcombo-image.bb         # Image recipe (now also enables SSH)
+├── recipes-utils/
+│   ├── envcombo-test/             # Rust test harness recipe + source
+│   └── envcombo-evtcat/          # On-target event-fd helper for the host GUI
+└── host-tools/envcombo-ctl/      # Host-side GUI (not part of the bitbake build)
 ```
