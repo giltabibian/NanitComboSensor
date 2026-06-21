@@ -224,8 +224,9 @@ image::diagrams/svg/buffer-flow-seq.svg[Triggered buffer capture sequence]
 == Design Decisions & Tradeoffs
 
 Plain `i2c_smbus` instead of regmap::
-The device has 19 byte-wide registers and the driver touches 11 of them; a
-regmap adds little. Decisive practical point: `CONFIG_REGMAP_I2C` is a
+The device has 19 byte-wide registers and the driver touches 13 of them (the
+other 6 are temperature/humidity registers, out of scope here); a regmap
+adds little. Decisive practical point: `CONFIG_REGMAP_I2C` is a
 hidden Kconfig symbol that in-tree drivers pull in via `select`, which an
 out-of-tree module cannot do cleanly. Register caching would be wrong
 anyway (STATUS is clear-on-read, ALS_OUT is hardware-latched).
