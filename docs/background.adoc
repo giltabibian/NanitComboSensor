@@ -1,0 +1,121 @@
+= ENV-COMBO IIO Driver -- Background
+:toc:
+:toclevels: 2
+:sectnums:
+:docinfo: shared
+
+[.back-to-index]
+link:index.html[<- Back to documentation index]
+
+This page provides background on the Linux frameworks and protocols used by
+this assignment. It is not specific to the `envcombo` driver -- consult
+link:architecture.html[Architecture & Design] for driver-specific details.
+
+== IIO (Industrial I/O)
+
+IIO is a Linux kernel subsystem that provides a standardized interface for
+sensors and data-acquisition devices: accelerometers, gyroscopes,
+temperature/humidity sensors, ambient-light sensors, ADCs, pressure sensors,
+and more.
+
+Without IIO every driver would expose its own ad-hoc sysfs layout. With IIO a
+light reading always appears at `in_illuminance_input`, a temperature reading at
+`in_temp_input`, etc. -- consistently across all vendors and drivers.
+
+=== Driver structure
+
+The driver allocates an `iio_dev`, declares one `iio_chan_spec` entry per
+measurement type, and registers a `read_raw` callback:
+
+[source,c]
+----
+static const struct iio_chan_spec sensor_channels[] = {
+    { .type = IIO_LIGHT },
+    { .type = IIO_TEMP  },
+};
+
+static int sensor_read_raw(struct iio_dev *indio_dev,
+                           struct iio_chan_spec const *chan,
+                           int *val, int *val2, long mask)
+{
+    switch (chan->type) {
+    case IIO_LIGHT:
+        *val = read_als_from_hw();
+        return IIO_VAL_INT;
+    /* ... */
+    }
+}
+----
+
+The framework calls `read_raw` whenever userspace reads a sysfs attribute and
+generates the attribute files automatically from the channel definitions.
+
+=== Userspace interface
+
+After the driver loads:
+
+----
+/sys/bus/iio/devices/iio:device0/in_illuminance_raw
+/sys/bus/iio/devices/iio:device0/in_temp_input
+/sys/bus/iio/devices/iio:device0/in_humidityrelative_input
+----
+
+Applications read these files without needing to know the I2C address, register
+layout, or sensor vendor.
+
+=== Buffering and triggers
+
+For high-rate sensors, polling sysfs would lose samples. IIO supports:
+
+* *Triggers* -- an IRQ, timer, or data-ready signal initiates each capture.
+* *Ring buffers* -- the driver pushes timestamped scan records into a kfifo;
+  userspace drains them from `/dev/iio:deviceN`.
+* *Events* -- threshold crossings and other hardware-reported conditions are
+  delivered as events through an event file descriptor.
+
+This driver uses all three: an IRQ-backed trigger fires on each ALS conversion,
+completed scans go into the ring buffer, and threshold crossings are reported as
+`IIO_EV_TYPE_THRESH` events.
+
+=== IIO vs hwmon
+
+[cols="1,3", options="header"]
+|===
+| Framework | Typical use
+
+| IIO
+| Environmental and motion sensors: accelerometers, gyroscopes, light, humidity,
+  pressure, ADCs.
+
+| hwmon
+| Board-level system monitoring: CPU / motherboard temperatures, fan speeds,
+  supply voltages.
+|===
+
+For an environmental combo sensor accessed over I2C, IIO is the idiomatic
+choice. `hwmon` is for monitoring the health of the board itself.
+
+== I2C and SMBus
+
+I2C (Inter-Integrated Circuit) is a two-wire serial bus (SDA data, SCL clock)
+designed for short-distance communication between a host controller and
+peripheral devices. Each peripheral has a 7-bit address; the ENV-COMBO sits at
+`0x39`.
+
+SMBus is a subset of I2C with stricter timing and a fixed set of transaction
+types (byte read/write, word read/write, block). The Linux kernel exposes these
+as `i2c_smbus_read_byte_data()`, `i2c_smbus_write_byte_data()`,
+`i2c_smbus_read_word_data()`, etc.
+
+This driver uses the SMBus helpers exclusively:
+
+* Single-byte register accesses use `i2c_smbus_read/write_byte_data()`.
+* 16-bit register pairs are read and written as a single word transaction via
+  `i2c_smbus_read_word_swapped()` / `i2c_smbus_write_word_swapped()`, which
+  handles the big-endian byte order of the device and prevents a torn read
+  between the two bytes of a pair.
+
+The device is described to the kernel via a Device Tree node that provides the
+bus number, I2C address, and interrupt line. The `i2c_driver` struct declares a
+`.id_table` and `.of_match_table` so the kernel binds the driver to any
+matching node automatically at module load.

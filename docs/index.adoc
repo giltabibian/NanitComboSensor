@@ -11,6 +11,11 @@ provided device simulator and a Rust end-to-end test harness.
 |===
 | Page | Contents
 
+| link:background.html[0. Background]
+| IIO framework overview (what IIO is, driver structure, sysfs interface,
+  buffering/triggers, IIO vs hwmon) and I2C / SMBus primer (two-wire bus,
+  SMBus helpers, 16-bit word transactions, device binding).
+
 | link:architecture.html[1. Architecture & Design]
 | Hardware model and register map, driver components and locking, the
   power-mode state machine, ALS usage flows (probe, one-shot read,

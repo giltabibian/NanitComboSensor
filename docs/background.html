@@ -5,7 +5,7 @@
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="generator" content="Asciidoctor 2.0.16">
-<title>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Installation, Build &amp; Run</title>
+<title>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Background</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Open+Sans:300,300italic,400,400italic,600,600italic%7CNoto+Serif:400,400italic,700,700italic%7CDroid+Sans+Mono:400,700">
 <style>
 /*! Asciidoctor default stylesheet | MIT License | https://asciidoctor.org */
@@ -465,32 +465,19 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </head>
 <body class="article">
 <div id="header">
-<h1>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Installation, Build &amp; Run</h1>
+<h1>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Background</h1>
 <div id="toc" class="toc">
 <div id="toctitle">Table of Contents</div>
 <ul class="sectlevel1">
-<li><a href="#_prerequisites">1. Prerequisites</a></li>
-<li><a href="#_configuration_add_the_layer_and_configure_the_build">2. Configuration - add the layer and configure the build</a></li>
-<li><a href="#_build">3. Build</a>
+<li><a href="#_iio_industrial_io">1. IIO (Industrial I/O)</a>
 <ul class="sectlevel2">
-<li><a href="#_check_the_build_artifacts">3.1. Check the build artifacts</a></li>
+<li><a href="#_driver_structure">1.1. Driver structure</a></li>
+<li><a href="#_userspace_interface">1.2. Userspace interface</a></li>
+<li><a href="#_buffering_and_triggers">1.3. Buffering and triggers</a></li>
+<li><a href="#_iio_vs_hwmon">1.4. IIO vs hwmon</a></li>
 </ul>
 </li>
-<li><a href="#_boot_in_qemu">4. Boot in QEMU</a></li>
-<li><a href="#_verify_the_modules_and_the_driver_bind">5. Verify the modules and the driver bind</a></li>
-<li><a href="#_exercise_the_driver_manually">6. Exercise the driver manually</a>
-<ul class="sectlevel2">
-<li><a href="#_on_demand_als_reads_one_shot">6.1. On-demand ALS reads (one-shot)</a></li>
-<li><a href="#_gain_and_integration_time">6.2. Gain and integration time</a></li>
-<li><a href="#_threshold_window">6.3. Threshold window</a></li>
-<li><a href="#_threshold_events">6.4. Threshold events</a></li>
-<li><a href="#_triggered_buffer_capture">6.5. Triggered buffer capture</a></li>
-<li><a href="#_inspect_raw_device_registers_simulator_debugfs">6.6. Inspect raw device registers (simulator debugfs)</a></li>
-</ul>
-</li>
-<li><a href="#_run_the_test_harness">7. Run the test harness</a></li>
-<li><a href="#_check_the_driver_coding_style">8. Check the driver coding style</a></li>
-<li><a href="#_troubleshooting">9. Troubleshooting</a></li>
+<li><a href="#_i2c_and_smbus">2. I2C and SMBus</a></li>
 </ul>
 </div>
 </div>
@@ -501,413 +488,176 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <p><a href="index.html">&#8592; Back to documentation index</a></p>
 </div>
 <div class="paragraph">
-<p>Host-side commands assume a Yocto 5.0 (scarthgap) checkout of poky; target-side commands run as root in the booted image (the default login, no password).</p>
+<p>This page provides background on the Linux frameworks and protocols used by
+this assignment. It is not specific to the <code>envcombo</code> driver&#8201;&#8212;&#8201;consult
+<a href="architecture.html">Architecture &amp; Design</a> for driver-specific details.</p>
 </div>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_prerequisites">1. Prerequisites</h2>
+<h2 id="_iio_industrial_io">1. IIO (Industrial I/O)</h2>
 <div class="sectionbody">
+<div class="paragraph">
+<p>IIO is a Linux kernel subsystem that provides a standardized interface for
+sensors and data-acquisition devices: accelerometers, gyroscopes,
+temperature/humidity sensors, ambient-light sensors, ADCs, pressure sensors,
+and more.</p>
+</div>
+<div class="paragraph">
+<p>Without IIO every driver would expose its own ad-hoc sysfs layout. With IIO a
+light reading always appears at <code>in_illuminance_input</code>, a temperature reading at
+<code>in_temp_input</code>, etc.&#8201;&#8212;&#8201;consistently across all vendors and drivers.</p>
+</div>
+<div class="sect2">
+<h3 id="_driver_structure">1.1. Driver structure</h3>
+<div class="paragraph">
+<p>The driver allocates an <code>iio_dev</code>, declares one <code>iio_chan_spec</code> entry per
+measurement type, and registers a <code>read_raw</code> callback:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-c" data-lang="c">static const struct iio_chan_spec sensor_channels[] = {
+    { .type = IIO_LIGHT },
+    { .type = IIO_TEMP  },
+};
+
+static int sensor_read_raw(struct iio_dev *indio_dev,
+                           struct iio_chan_spec const *chan,
+                           int *val, int *val2, long mask)
+{
+    switch (chan-&gt;type) {
+    case IIO_LIGHT:
+        *val = read_als_from_hw();
+        return IIO_VAL_INT;
+    /* ... */
+    }
+}</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>The framework calls <code>read_raw</code> whenever userspace reads a sysfs attribute and
+generates the attribute files automatically from the channel definitions.</p>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_userspace_interface">1.2. Userspace interface</h3>
+<div class="paragraph">
+<p>After the driver loads:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre>/sys/bus/iio/devices/iio:device0/in_illuminance_raw
+/sys/bus/iio/devices/iio:device0/in_temp_input
+/sys/bus/iio/devices/iio:device0/in_humidityrelative_input</pre>
+</div>
+</div>
+<div class="paragraph">
+<p>Applications read these files without needing to know the I2C address, register
+layout, or sensor vendor.</p>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_buffering_and_triggers">1.3. Buffering and triggers</h3>
+<div class="paragraph">
+<p>For high-rate sensors, polling sysfs would lose samples. IIO supports:</p>
+</div>
 <div class="ulist">
 <ul>
 <li>
-<p>poky, scarthgap branch (<code>git clone -b scarthgap git://git.yoctoproject.org/poky</code>)</p>
+<p><strong>Triggers</strong>&#8201;&#8212;&#8201;an IRQ, timer, or data-ready signal initiates each capture.</p>
 </li>
 <li>
-<p>checked out to the <code>yocto-5.0.18</code> tag</p>
+<p><strong>Ring buffers</strong>&#8201;&#8212;&#8201;the driver pushes timestamped scan records into a kfifo;
+userspace drains them from <code>/dev/iio:deviceN</code>.</p>
 </li>
 <li>
-<p>The usual Yocto host packages for your distro</p>
-</li>
-<li>
-<p>This repository checked out next to (or anywhere relative to) poky</p>
+<p><strong>Events</strong>&#8201;&#8212;&#8201;threshold crossings and other hardware-reported conditions are
+delivered as events through an event file descriptor.</p>
 </li>
 </ul>
 </div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_configuration_add_the_layer_and_configure_the_build">2. Configuration - add the layer and configure the build</h2>
-<div class="sectionbody">
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">cd poky
-source oe-init-build-env build-qemu-arm64        # creates/enters the build dir
-
-# Update MACHINE in conf/local.conf to build for QEMU's 64-bit ARM platform
-# MACHINE = "qemuarm64"
-
-# register the layer:
-bitbake-layers add-layer /path/to/NanitComboSensor
-bitbake-layers show-layers                        # meta-nanit-envcombo must be listed</code></pre>
-</div>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_build">3. Build</h2>
-<div class="sectionbody">
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">bitbake envcombo-image                            # full test image (recommended)
-
-# or individual pieces:
-bitbake envcombo-driver                           # driver module only
-bitbake envcombo-sim                              # simulator module only
-bitbake envcombo-test                             # Rust test harness only
-bitbake virtual/kernel                            # kernel with the IIO fragment</code></pre>
+<div class="paragraph">
+<p>This driver uses all three: an IRQ-backed trigger fires on each ALS conversion,
+completed scans go into the ring buffer, and threshold crossings are reported as
+<code>IIO_EV_TYPE_THRESH</code> events.</p>
 </div>
 </div>
 <div class="sect2">
-<h3 id="_check_the_build_artifacts">3.1. Check the build artifacts</h3>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell"># deployed image + kernel:
-ls tmp/deploy/images/qemuarm64/envcombo-image-qemuarm64.rootfs.ext4 \
-   tmp/deploy/images/qemuarm64/Image
-
-# everything envcombo-related made it into the image:
-grep -E 'envcombo' tmp/deploy/images/qemuarm64/envcombo-image-qemuarm64.rootfs.manifest
-# expect: envcombo-driver, envcombo-sim, envcombo-test,
-#         kernel-module-envcombo-*, kernel-module-i2c-envcombo-sim-*
-
-# kernel config fragment was applied:
-grep -E 'CONFIG_IIO(_BUFFER|_TRIGGER|_TRIGGERED_BUFFER|_KFIFO_BUF)?=' \
-    tmp/work/qemuarm64-poky-linux/linux-yocto/*/linux-qemuarm64-standard-build/.config
-
-# compiled module objects:
-ls tmp/work/qemuarm64-poky-linux/envcombo-driver/1.0/envcombo.ko \
-   tmp/work/qemuarm64-poky-linux/envcombo-sim/1.0/i2c-envcombo-sim.ko</code></pre>
-</div>
-</div>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_boot_in_qemu">4. Boot in QEMU</h2>
-<div class="sectionbody">
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">runqemu qemuarm64 envcombo-image nographic slirp
-
-# if runqemu cannot resolve the image by name, point it at the qemuboot file:
-runqemu tmp/deploy/images/qemuarm64/envcombo-image-qemuarm64.rootfs.qemuboot.conf nographic slirp
-
-# add "snapshot" to keep the rootfs pristine across runs; exit QEMU with Ctrl-A x</code></pre>
-</div>
-</div>
-<div class="paragraph">
-<p>Log in as <code>root</code> (no password).</p>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_verify_the_modules_and_the_driver_bind">5. Verify the modules and the driver bind</h2>
-<div class="sectionbody">
-<div class="paragraph">
-<p>Both modules autoload at boot (<code>/etc/modules-load.d/</code>). To check:</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">lsmod | grep -E 'envcombo|i2c_envcombo_sim'
-dmesg | grep -E 'envcombo'
-# expect: "envcombo-sim: adapter #N, device at 0x39, irq M"
-
-# the bound i2c client and its driver:
-ls /sys/bus/i2c/devices/                          # e.g. 0-0039
-cat /sys/bus/i2c/devices/*-0039/name              # envcombo
-readlink /sys/bus/i2c/devices/*-0039/driver       # -&gt; .../drivers/envcombo
-
-# the IIO device and trigger:
-grep -r . /sys/bus/iio/devices/iio:device0/name   # envcombo
-cat /sys/bus/iio/devices/trigger0/name            # envcombo-dev0
-ls /dev/iio:device0</code></pre>
-</div>
-</div>
-<div class="paragraph">
-<p>Manual load/unload (e.g. after testing or to re-probe):</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">rmmod i2c_envcombo_sim &amp;&amp; rmmod envcombo
-modprobe i2c-envcombo-sim &amp;&amp; modprobe envcombo
-dmesg | tail</code></pre>
-</div>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_exercise_the_driver_manually">6. Exercise the driver manually</h2>
-<div class="sectionbody">
-<div class="paragraph">
-<p><strong>All paths below are relative to the IIO device directory&#8201;&#8212;&#8201;run this
-first:</strong></p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">cd /sys/bus/iio/devices/iio:device0</code></pre>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_on_demand_als_reads_one_shot">6.1. On-demand ALS reads (one-shot)</h3>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">cat in_illuminance_raw        # runs a one-shot conversion (device sleeps after)
-cat in_illuminance_scale      # 1/(gain x calib_gain); raw * scale = illuminance</code></pre>
-</div>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_gain_and_integration_time">6.2. Gain and integration time</h3>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">cat in_illuminance_hardwaregain_available         # 1 4 16 64
-echo 16 &gt; in_illuminance_hardwaregain
-cat in_illuminance_hardwaregain                   # 16
-cat in_illuminance_scale                          # 0.0625 (= 1/16)
-echo 3 &gt; in_illuminance_hardwaregain              # write error: Invalid argument
-
-cat in_illuminance_integration_time_available     # 0.050000 0.100000 0.200000 0.400000
-echo 0.4 &gt; in_illuminance_integration_time
-cat in_illuminance_integration_time               # 0.400000</code></pre>
-</div>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_threshold_window">6.3. Threshold window</h3>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell"># window [100, 800]; write falling first so the window stays well-formed:
-echo 100  &gt; events/in_illuminance_thresh_falling_value
-echo 800 &gt; events/in_illuminance_thresh_rising_value
-cat events/in_illuminance_thresh_*_value
-
-echo 10  &gt; events/in_illuminance_thresh_rising_value   # rejected (&lt; falling)</code></pre>
-</div>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_threshold_events">6.4. Threshold events</h3>
-<div class="paragraph">
-<p>Enabling the event powers the device into CONTINUOUS; a crossing out of the
-window delivers an <code>IIO_EV_DIR_EITHER</code> event on the chardev&#8217;s event fd.
-Reading the event stream needs the <code>IIO_GET_EVENT_FD_IOCTL</code> ioctl, which a
-plain shell cannot issue&#8201;&#8212;&#8201;use the test harness (test 5) or
-<code>iio_event_monitor /dev/iio:device0</code> if you add <code>libiio</code> to the image. The
-enable/power side is fully checkable from the shell:</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">echo 1 &gt; events/in_illuminance_thresh_either_en
-cat events/in_illuminance_thresh_either_en        # 1
-# device register check -- PWR_MODE (offset 0x12) == 03 (CONTINUOUS):
-hexdump -C /sys/kernel/debug/envcombo-sim/regs
-
-echo 0 &gt; events/in_illuminance_thresh_either_en   # back to SLEEP (01)</code></pre>
-</div>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_triggered_buffer_capture">6.5. Triggered buffer capture</h3>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">echo 1 &gt; scan_elements/in_illuminance_en
-echo 1 &gt; scan_elements/in_timestamp_en
-cat trigger/current_trigger 2&gt;/dev/null
-echo envcombo-dev0 &gt; trigger/current_trigger
-echo 64 &gt; buffer/length
-echo 1 &gt; buffer/enable
-
-# one 16-byte record per 200 ms: [u16 light][6B pad][s64 timestamp]
-hexdump -e '1/2 "light=%5u " 6/1 "%02x " 1/4 " ts_lo=%u " 1/4 "ts_hi=%u\n"' -n 160 /dev/iio:device0
-
-echo 0 &gt; buffer/enable
-echo 0 &gt; scan_elements/in_illuminance_en
-echo 0 &gt; scan_elements/in_timestamp_en</code></pre>
-</div>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_inspect_raw_device_registers_simulator_debugfs">6.6. Inspect raw device registers (simulator debugfs)</h3>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">mount -t debugfs debugfs /sys/kernel/debug 2&gt;/dev/null
-hexdump -C /sys/kernel/debug/envcombo-sim/regs
-# offsets: 0x06 CFG, 0x08/0x0A TH_LOW/TH_HIGH (big-endian pairs),
-#          0x10 CAL_AGAIN, 0x11 CAL_ATIME, 0x12 PWR_MODE (01=SLEEP, 03=CONT)</code></pre>
-</div>
-</div>
-<div class="paragraph">
-<p>The file is also writable at the same offsets, e.g. to simulate a factory
-integration-time override (<code>CAL_ATIME</code>, offset 0x11) before re-probing the
-driver:</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">printf '\x64' | dd of=/sys/kernel/debug/envcombo-sim/regs bs=1 seek=17 conv=notrunc
-rmmod envcombo &amp;&amp; modprobe envcombo
-dmesg | tail -1     # "factory calibration overrides ALS integration time to 100 ms..."</code></pre>
-</div>
-</div>
-<div class="admonitionblock tip">
-<table>
-<tr>
-<td class="icon">
-<div class="title">Tip</div>
-</td>
-<td class="content">
-For field-by-field decoding of the register file and captured ALS
-buffers with ImHex (register snapshots, light-vs-time plots, and full
-records with timestamps), see <a href="debugging.html">Manual Debugging &amp;
-Binary Inspection</a>.
-</td>
-</tr>
-</table>
-</div>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_run_the_test_harness">7. Run the test harness</h2>
-<div class="sectionbody">
-<div class="paragraph">
-<p>The harness is self-contained: module-loading reloads both modules for a
-clean slate and every device test rebaselines first, so it can be run at any
-time (including right after the manual section above) without a reboot.</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">envcombo-test
-echo $?             # 0 = all passed, 1 = at least one failure</code></pre>
-</div>
-</div>
-<div class="paragraph">
-<p>Expected output:</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre>envcombo driver test harness (15 tests, seed 4675903481288702464)
-[1/15] module-loading               PASS
-[2/15] direct-als-read              PASS
-[3/15] gain-and-integration-time    PASS
-[4/15] gain-response                PASS
-[5/15] time-response                PASS
-[6/15] factory-gain-cal             PASS
-[7/15] factory-atime-override       PASS
-[8/15] threshold-attributes         PASS
-[9/15] threshold-events             PASS
-[10/15] triggered-buffer            PASS
-[11/15] buffer-no-timestamp         PASS
-[12/15] buffer-timestamp-accuracy   PASS
-[13/15] power-fsm-transitions       PASS
-[14/15] module-unloading            PASS
-[15/15] kernel-log-health           PASS
-RESULT: all 15 tests passed (seed 4675903481288702464)</pre>
-</div>
-</div>
-<div class="paragraph">
-<p>The device tests run in a seeded random order each time to prove they are
-order-independent (the seed is printed so a failing order can be replayed).
-See <a href="test-harness.html">the test harness page</a> for the per-test
-assertions, the ordering rules, and how to replay a seed. After a run,
-<code>dmesg | tail -20</code> should show only the clean unload/reload messages from
-module-loading and module-unloading.</p>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_check_the_driver_coding_style">8. Check the driver coding style</h2>
-<div class="sectionbody">
-<div class="paragraph">
-<p>The driver follows the Linux kernel coding style. Verify it with the
-kernel&#8217;s own <code>checkpatch.pl</code>. If you don&#8217;t have a kernel tree handy, fetch
-the standalone script (plus its optional data files) and run it in file mode:</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell"># fetch checkpatch and its optional data files:
-curl -fsSL -o /tmp/checkpatch.pl \
-    https://raw.githubusercontent.com/torvalds/linux/master/scripts/checkpatch.pl
-curl -fsSL -o /tmp/spelling.txt \
-    https://raw.githubusercontent.com/torvalds/linux/master/scripts/spelling.txt
-curl -fsSL -o /tmp/const_structs.checkpatch \
-    https://raw.githubusercontent.com/torvalds/linux/master/scripts/const_structs.checkpatch
-
-# check the driver source (file mode, no kernel tree, strict checks):
-perl /tmp/checkpatch.pl --no-tree --strict -f \
-    recipes-kernel/envcombo-driver/files/envcombo.c
-# expect: "total: 0 errors, 0 warnings, 0 checks"</code></pre>
-</div>
-</div>
-<div class="paragraph">
-<p><code>--no-tree</code> runs standalone, <code>--strict</code> enables the stricter <code>CHECK:</code>-level
-tests, and <code>-f</code> checks an existing file instead of a patch. Add <code>--terse</code> for
-one line per finding.</p>
-</div>
-<div class="admonitionblock note">
-<table>
-<tr>
-<td class="icon">
-<div class="title">Note</div>
-</td>
-<td class="content">
-checkpatch only validates the first wrapped line of a multi-line
-statement against the opening parenthesis, so it does not catch alignment
-drift on the second and later continuation lines&#8201;&#8212;&#8201;review those by eye.
-</td>
-</tr>
-</table>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_troubleshooting">9. Troubleshooting</h2>
-<div class="sectionbody">
+<h3 id="_iio_vs_hwmon">1.4. IIO vs hwmon</h3>
 <table class="tableblock frame-all grid-all stretch">
 <colgroup>
-<col style="width: 37.5%;">
-<col style="width: 62.5%;">
+<col style="width: 25%;">
+<col style="width: 75%;">
 </colgroup>
 <thead>
 <tr>
-<th class="tableblock halign-left valign-top">Symptom</th>
-<th class="tableblock halign-left valign-top">Check</th>
+<th class="tableblock halign-left valign-top">Framework</th>
+<th class="tableblock halign-left valign-top">Typical use</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">No <code>iio:device0</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>lsmod</code> for both modules; <code>dmesg | grep envcombo</code> for probe errors
-  (WHO_AM_I mismatch returns <code>-ENODEV</code>, missing IRQ returns <code>-EINVAL</code>).</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">IIO</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Environmental and motion sensors: accelerometers, gyroscopes, light, humidity,
+  pressure, ADCs.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>in_illuminance_raw</code> returns <code>Connection timed out</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">The one-shot completion timed out (500 ms): the interrupt path is broken.
-  <code>cat /proc/interrupts | grep envcombo</code> should increment on each read.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Buffer delivers nothing</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>cat trigger/current_trigger</code> must be <code>envcombo-dev0</code>;
-  <code>scan_elements/in_illuminance_en</code> must be 1 before <code>buffer/enable</code>.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>integration_time</code> write fails with <code>Operation not supported</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>CAL_ATIME</code> factory override is active&#8201;&#8212;&#8201;expected behavior; see the
-  probe-time <code>dev_warn</code> in dmesg.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Harness FAIL lines</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">The message states observation vs. expectation; start from the first
-  failing test (later ones may cascade from it).</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">hwmon</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Board-level system monitoring: CPU / motherboard temperatures, fan speeds,
+  supply voltages.</p></td>
 </tr>
 </tbody>
 </table>
+<div class="paragraph">
+<p>For an environmental combo sensor accessed over I2C, IIO is the idiomatic
+choice. <code>hwmon</code> is for monitoring the health of the board itself.</p>
+</div>
+</div>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_i2c_and_smbus">2. I2C and SMBus</h2>
+<div class="sectionbody">
+<div class="paragraph">
+<p>I2C (Inter-Integrated Circuit) is a two-wire serial bus (SDA data, SCL clock)
+designed for short-distance communication between a host controller and
+peripheral devices. Each peripheral has a 7-bit address; the ENV-COMBO sits at
+<code>0x39</code>.</p>
+</div>
+<div class="paragraph">
+<p>SMBus is a subset of I2C with stricter timing and a fixed set of transaction
+types (byte read/write, word read/write, block). The Linux kernel exposes these
+as <code>i2c_smbus_read_byte_data()</code>, <code>i2c_smbus_write_byte_data()</code>,
+<code>i2c_smbus_read_word_data()</code>, etc.</p>
+</div>
+<div class="paragraph">
+<p>This driver uses the SMBus helpers exclusively:</p>
+</div>
+<div class="ulist">
+<ul>
+<li>
+<p>Single-byte register accesses use <code>i2c_smbus_read/write_byte_data()</code>.</p>
+</li>
+<li>
+<p>16-bit register pairs are read and written as a single word transaction via
+<code>i2c_smbus_read_word_swapped()</code> / <code>i2c_smbus_write_word_swapped()</code>, which
+handles the big-endian byte order of the device and prevents a torn read
+between the two bytes of a pair.</p>
+</li>
+</ul>
+</div>
+<div class="paragraph">
+<p>The device is described to the kernel via a Device Tree node that provides the
+bus number, I2C address, and interrupt line. The <code>i2c_driver</code> struct declares a
+<code>.id_table</code> and <code>.of_match_table</code> so the kernel binds the driver to any
+matching node automatically at module load.</p>
+</div>
 </div>
 </div>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-21 09:03:37 +0300
+Last updated 2026-06-21 09:23:31 +0300
 </div>
 </div>
 </body>

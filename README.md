@@ -38,6 +38,9 @@ flow charts, and screenshots that GitHub's web view does not render reliably —
 **for the intended experience, clone the repo and open
 [`docs/index.html`](docs/index.html) in a browser.**
 
+0. [Background](docs/background.adoc) — IIO framework primer (what IIO is,
+   driver structure, sysfs interface, buffering/triggers, IIO vs hwmon) and
+   I2C/SMBus overview (two-wire bus, SMBus helpers, 16-bit word transactions).
 1. [Architecture & Design](docs/architecture.adoc) — hardware/register map,
    driver components and locking, the power-mode FSM, ALS usage flows, the
    userspace ABI, and the design decisions with their tradeoffs.
