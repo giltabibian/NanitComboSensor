@@ -12,16 +12,6 @@ const EVENT_LOG_CAP: usize = 200;
 const PLOT_CAP: usize = 500;
 
 #[derive(PartialEq, Clone, Copy)]
-enum Tab {
-    Channel,
-    Events,
-    Buffer,
-    State,
-    Simulator,
-    Capture,
-}
-
-#[derive(PartialEq, Clone, Copy)]
 enum ConnStatus {
     Disconnected,
     Connecting,
@@ -63,7 +53,6 @@ pub struct EnvComboCtl {
     status_msg: String,
     connect_rx: Option<Receiver<Result<Vec<u8>, String>>>,
     device: Option<abi::Device>,
-    tab: Tab,
 
     pending: Vec<PendingAction>,
 
@@ -111,7 +100,6 @@ impl Default for EnvComboCtl {
             status_msg: String::new(),
             connect_rx: None,
             device: None,
-            tab: Tab::Channel,
 
             pending: Vec::new(),
 
@@ -159,17 +147,6 @@ impl eframe::App for EnvComboCtl {
 
         egui::TopBottomPanel::top("connection").show(ctx, |ui| self.connection_bar(ui));
 
-        egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.tab, Tab::Channel, "Channel");
-                ui.selectable_value(&mut self.tab, Tab::Events, "Events");
-                ui.selectable_value(&mut self.tab, Tab::Buffer, "Buffer");
-                ui.selectable_value(&mut self.tab, Tab::State, "State");
-                ui.selectable_value(&mut self.tab, Tab::Simulator, "Simulator");
-                ui.selectable_value(&mut self.tab, Tab::Capture, "Capture / Export");
-            });
-        });
-
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.device.is_none() {
                 ui.label("Not connected. Enter connection details above and click Connect.");
@@ -178,14 +155,19 @@ impl eframe::App for EnvComboCtl {
                 }
                 return;
             }
-            match self.tab {
-                Tab::Channel => self.channel_tab(ui),
-                Tab::Events => self.events_tab(ui),
-                Tab::Buffer => self.buffer_tab(ui),
-                Tab::State => self.state_tab(ui),
-                Tab::Simulator => self.simulator_tab(ui),
-                Tab::Capture => self.capture_tab(ui),
-            }
+            // One page, collapsible sections instead of tabs -- nothing is
+            // ever out of reach behind a tab switch, but the ones you're
+            // not using right now can be folded out of the way.
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                collapsing_section(ui, "Channel", true, |ui| self.channel_section(ui));
+                collapsing_section(ui, "Events", true, |ui| self.events_section(ui));
+                collapsing_section(ui, "Buffer", true, |ui| self.buffer_section(ui));
+                collapsing_section(ui, "State", false, |ui| self.state_section(ui));
+                collapsing_section(ui, "Simulator", false, |ui| self.simulator_section(ui));
+                collapsing_section(ui, "Capture / Export", false, |ui| {
+                    self.capture_section(ui)
+                });
+            });
         });
 
         let live = self.event_stream.is_some() || self.buffer_stream.is_some();
@@ -367,11 +349,10 @@ impl EnvComboCtl {
         });
     }
 
-    fn channel_tab(&mut self, ui: &mut egui::Ui) {
+    fn channel_section(&mut self, ui: &mut egui::Ui) {
         let device = self.device.clone();
         let s = self.snapshot.clone();
 
-        ui.heading("ALS channel");
         ui.label(format!(
             "in_illuminance_raw: {}",
             s.raw.map(|v| v.to_string()).unwrap_or("-".into())
@@ -428,7 +409,7 @@ impl EnvComboCtl {
         });
     }
 
-    fn events_tab(&mut self, ui: &mut egui::Ui) {
+    fn events_section(&mut self, ui: &mut egui::Ui) {
         let device = self.device.clone();
         let s = self.snapshot.clone();
 
@@ -628,7 +609,7 @@ impl EnvComboCtl {
         }
     }
 
-    fn buffer_tab(&mut self, ui: &mut egui::Ui) {
+    fn buffer_section(&mut self, ui: &mut egui::Ui) {
         let device = self.device.clone();
         let s = self.snapshot.clone();
 
@@ -704,7 +685,13 @@ impl EnvComboCtl {
         let ts_on = self.snapshot.scan_ts_en.unwrap_or(false);
         let record_len = if ts_on { 16 } else { 2 };
         let cmd = format!(
-            "echo envcombo-dev0 > {base}/trigger/current_trigger 2>/dev/null; \
+            // in_illuminance_en is forced on here rather than left to the
+            // checkbox above: the IIO core rejects buffer/enable=1 with no
+            // scan elements active, and that failure is otherwise silent
+            // (chained with ';', not '&&') -- `dd` would then just block
+            // forever with no data and no visible error.
+            "echo 1 > {base}/scan_elements/in_illuminance_en; \
+             echo envcombo-dev0 > {base}/trigger/current_trigger 2>/dev/null; \
              echo 1 > {base}/buffer/enable; \
              dd if={chardev} bs={record_len} 2>/dev/null",
             base = device.base,
@@ -759,8 +746,8 @@ impl EnvComboCtl {
         }
     }
 
-    fn state_tab(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Power-mode / status (read-only, decoded from simulator debugfs)");
+    fn state_section(&mut self, ui: &mut egui::Ui) {
+        ui.weak("Power-mode / status, decoded from the simulator's debugfs registers");
         let Some(regs) = self.snapshot.regs else {
             ui.label("no register snapshot yet");
             return;
@@ -794,8 +781,8 @@ impl EnvComboCtl {
         );
     }
 
-    fn simulator_tab(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Simulator register file (debugfs, read-only)");
+    fn simulator_section(&mut self, ui: &mut egui::Ui) {
+        ui.weak("Full 19-byte debugfs register file, read-only");
         let Some(regs) = self.snapshot.regs else {
             ui.label("no register snapshot yet");
             return;
@@ -898,8 +885,7 @@ impl EnvComboCtl {
         });
     }
 
-    fn capture_tab(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Capture & export (for ImHex)");
+    fn capture_section(&mut self, ui: &mut egui::Ui) {
         ui.label(
             "Pulls bytes straight over the open SSH connection to a local file -- \
              replaces the manual nc-listener dance in docs/debugging.adoc.",
@@ -979,7 +965,9 @@ impl EnvComboCtl {
         let ts_on = self.snapshot.scan_ts_en.unwrap_or(false);
         let record_len = if ts_on { 16 } else { 2 };
         let cmd = format!(
-            "echo envcombo-dev0 > {base}/trigger/current_trigger 2>/dev/null; \
+            // in_illuminance_en forced on -- see start_buffer_stream for why.
+            "echo 1 > {base}/scan_elements/in_illuminance_en; \
+             echo envcombo-dev0 > {base}/trigger/current_trigger 2>/dev/null; \
              echo {len} > {base}/buffer/length; \
              echo 1 > {base}/buffer/enable; \
              dd if={chardev} bs={record_len} count={n} 2>/dev/null; \
@@ -1044,6 +1032,18 @@ impl EnvComboCtl {
             }
         }
     }
+}
+
+fn collapsing_section(
+    ui: &mut egui::Ui,
+    title: &str,
+    default_open: bool,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
+    egui::CollapsingHeader::new(egui::RichText::new(title).heading())
+        .default_open(default_open)
+        .show(ui, add_contents);
+    ui.add_space(4.0);
 }
 
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
