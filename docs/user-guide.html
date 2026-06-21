@@ -608,9 +608,9 @@ runqemu tmp/deploy/images/qemuarm64/envcombo-image-qemuarm64.rootfs.qemuboot.con
 <div class="sectionbody">
 <div class="paragraph">
 <p>The image includes a dropbear SSH server (<code>IMAGE_FEATURES +=
-"ssh-server-dropbear"</code>, with <code>DROPBEAR_EXTRA_ARGS = "-B"</code> so the blank root
-password also works over SSH). With <code>slirp</code> networking this is reachable
-from the host, conventionally at <code>localhost:2222</code>:</p>
+"ssh-server-dropbear allow-root-login allow-empty-password"</code>, so the blank
+root password also works over SSH). With <code>slirp</code> networking this is
+reachable from the host, conventionally at <code>localhost:2222</code>:</p>
 </div>
 <div class="listingblock">
 <div class="content">
@@ -996,7 +996,7 @@ drift on the second and later continuation lines&#8201;&#8212;&#8201;review thos
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-21 18:37:47 +0300
+Last updated 2026-06-21 19:19:36 +0300
 </div>
 </div>
 </body>

@@ -83,9 +83,9 @@ Log in as `root` (no password).
 == SSH access
 
 The image includes a dropbear SSH server (`IMAGE_FEATURES +=
-"ssh-server-dropbear"`, with `DROPBEAR_EXTRA_ARGS = "-B"` so the blank root
-password also works over SSH). With `slirp` networking this is reachable
-from the host, conventionally at `localhost:2222`:
+"ssh-server-dropbear allow-root-login allow-empty-password"`, so the blank
+root password also works over SSH). With `slirp` networking this is
+reachable from the host, conventionally at `localhost:2222`:
 
 [source,shell]
 ----

@@ -524,9 +524,13 @@ SSH instead. Two small additions make that possible:</p>
   `core-image-minimal&#8217;s footprint.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>DROPBEAR_EXTRA_ARGS = "-B"</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Allows the image&#8217;s existing blank root password to keep working over SSH
- &#8201;&#8212;&#8201;dropbear refuses empty-password logins by default otherwise.</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>IMAGE_FEATURES += "allow-root-login allow-empty-password"</code></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Lets the image&#8217;s existing blank root password work over SSH too. These
+  are the actual knobs: OE-core&#8217;s rootfs postcommands rewrite
+  <code>/etc/default/dropbear</code> (shipped with <code>DROPBEAR_EXTRA_ARGS="-w"</code>,
+  disallow root) based on these two <code>IMAGE_FEATURES</code>. Setting
+  <code>DROPBEAR_EXTRA_ARGS</code> directly from the image recipe does <strong>not</strong> work&#8201;&#8212;&#8201;  that variable lives in the image recipe&#8217;s own namespace, not the
+  separate <code>dropbear</code> package&#8217;s.</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>recipes-utils/envcombo-evtcat/</code></p></td>
@@ -760,7 +764,7 @@ responsive while it waits.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-21 18:37:25 +0300
+Last updated 2026-06-21 19:19:27 +0300
 </div>
 </div>
 </body>

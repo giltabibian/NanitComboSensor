@@ -9,7 +9,7 @@
 //! libssh2 read can't otherwise be interrupted from another thread,
 //! cancelling one shuts down the underlying socket out from under it.
 
-use ssh2::Session;
+use ssh2::{KeyboardInteractivePrompt, Prompt, Session};
 use std::io::Read;
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::sync::mpsc::Sender;
@@ -49,12 +49,54 @@ fn connect(cfg: &Config) -> Result<(Session, TcpStream), String> {
     let mut sess = Session::new().map_err(|e| format!("session init: {e}"))?;
     sess.set_tcp_stream(tcp);
     sess.handshake().map_err(|e| format!("handshake: {e}"))?;
-    sess.userauth_password(&cfg.user, &cfg.password)
-        .map_err(|e| format!("auth as {}: {e}", cfg.user))?;
-    if !sess.authenticated() {
-        return Err("authentication rejected".to_string());
-    }
+    authenticate(&sess, &cfg.user, &cfg.password)?;
     Ok((sess, shutdown_handle))
+}
+
+struct PasswordPrompter<'a> {
+    password: &'a str,
+}
+
+impl KeyboardInteractivePrompt for PasswordPrompter<'_> {
+    fn prompt<'a>(&mut self, _username: &str, _instructions: &str, prompts: &[Prompt<'a>]) -> Vec<String> {
+        prompts.iter().map(|_| self.password.to_string()).collect()
+    }
+}
+
+/// Tries every auth method the server actually offers, in roughly the order
+/// a normal `ssh` client would. A server permitting blank passwords (e.g.
+/// dropbear with `allow-empty-password`) may grant access outright via the
+/// `none` method, via plain `password`, or -- common with PAM-backed
+/// servers -- only via `keyboard-interactive` even though it looks like it
+/// supports `password`. Going straight to `userauth_password` only covers
+/// the middle case, which is what silently broke this against dropbear.
+fn authenticate(sess: &Session, user: &str, password: &str) -> Result<(), String> {
+    let methods = match sess.auth_methods(user) {
+        Ok(m) => m.to_string(),
+        Err(_) if sess.authenticated() => return Ok(()), // "none" already succeeded
+        Err(e) => return Err(format!("query auth methods for {user}: {e}")),
+    };
+    if sess.authenticated() {
+        return Ok(());
+    }
+
+    if methods.is_empty() || methods.contains("password") {
+        let _ = sess.userauth_password(user, password);
+        if sess.authenticated() {
+            return Ok(());
+        }
+    }
+    if methods.contains("keyboard-interactive") {
+        let mut prompter = PasswordPrompter { password };
+        let _ = sess.userauth_keyboard_interactive(user, &mut prompter);
+        if sess.authenticated() {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "auth as {user} failed (server offered: {})",
+        if methods.is_empty() { "none" } else { &methods }
+    ))
 }
 
 fn drain_channel(channel: &mut ssh2::Channel) -> Result<Vec<u8>, String> {

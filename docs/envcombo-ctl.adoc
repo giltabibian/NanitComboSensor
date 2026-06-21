@@ -31,9 +31,14 @@ SSH instead. Two small additions make that possible:
 | Adds a minimal SSH server to the image, consistent with
   `core-image-minimal`'s footprint.
 
-| `DROPBEAR_EXTRA_ARGS = "-B"`
-| Allows the image's existing blank root password to keep working over SSH
-  -- dropbear refuses empty-password logins by default otherwise.
+| `IMAGE_FEATURES += "allow-root-login allow-empty-password"`
+| Lets the image's existing blank root password work over SSH too. These
+  are the actual knobs: OE-core's rootfs postcommands rewrite
+  `/etc/default/dropbear` (shipped with `DROPBEAR_EXTRA_ARGS="-w"`,
+  disallow root) based on these two `IMAGE_FEATURES`. Setting
+  `DROPBEAR_EXTRA_ARGS` directly from the image recipe does *not* work --
+  that variable lives in the image recipe's own namespace, not the
+  separate `dropbear` package's.
 
 | `recipes-utils/envcombo-evtcat/`
 | A tiny libc-only helper installed on the target. A plain shell can't

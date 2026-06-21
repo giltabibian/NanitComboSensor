@@ -6,6 +6,15 @@ description = "Host-side egui GUI for driving the ENV-COMBO IIO driver ABI over 
 license = "MIT"
 
 [dependencies]
-eframe = "0.29"
+# accesskit (AT-SPI/D-Bus screen-reader integration) is an eframe default
+# feature; it hard-fails the whole winit event loop with "Broken pipe" when
+# no AT-SPI registry daemon is running (e.g. under WSLg), so it's dropped
+# here and the other defaults are re-listed explicitly.
+eframe = { version = "0.29", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "wayland",
+    "x11",
+] }
 egui_plot = "0.29"
 ssh2 = { version = "0.9", features = ["vendored-openssl"] }
