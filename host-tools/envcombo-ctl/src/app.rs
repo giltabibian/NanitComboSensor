@@ -2,7 +2,7 @@
 
 use crate::{abi, ssh};
 use eframe::egui;
-use egui_plot::{Line, Plot, PlotPoints};
+use egui_plot::{HLine, Legend, Line, LineStyle, Plot, PlotPoints};
 use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
@@ -65,7 +65,7 @@ pub struct EnvComboCtl {
     thresh_falling_buf: String,
     event_log: VecDeque<EventLogEntry>,
     event_stream: Option<ssh::Stream>,
-    event_rx: Option<Receiver<Vec<u8>>>,
+    event_rx: Option<Receiver<ssh::StreamEvent>>,
     event_partial: Vec<u8>,
     next_event_seq: u64,
     pending_event_reads: Vec<(u64, Receiver<Result<Vec<u8>, String>>)>,
@@ -75,7 +75,7 @@ pub struct EnvComboCtl {
     plot_record_len: usize,
     sample_index: f64,
     buffer_stream: Option<ssh::Stream>,
-    buffer_rx: Option<Receiver<Vec<u8>>>,
+    buffer_rx: Option<Receiver<ssh::StreamEvent>>,
     buffer_partial: Vec<u8>,
 
     export_dir: String,
@@ -517,7 +517,12 @@ impl EnvComboCtl {
             return;
         };
         let (tx, rx) = mpsc::channel();
-        match ssh::start_stream(&self.cfg, &format!("envcombo-evtcat {}", device.chardev), tx) {
+        let cmd = format!(
+            "{}; sleep 0.2; envcombo-evtcat {}",
+            abi::kill_stray_streams_cmd(),
+            device.chardev
+        );
+        match ssh::start_stream(&self.cfg, &cmd, tx) {
             Ok(stream) => {
                 self.event_stream = Some(stream);
                 self.event_rx = Some(rx);
@@ -533,6 +538,9 @@ impl EnvComboCtl {
             s.stop();
         }
         self.event_rx = None;
+        // Belt-and-suspenders: make sure the remote process is actually
+        // dead, not just disconnected from -- see kill_stray_streams_cmd.
+        self.fire("cleanup", abi::kill_stray_streams_cmd());
         self.push_event_entry(EventLogEntry::Marker("-- monitor stopped --".to_string()));
     }
 
@@ -544,37 +552,56 @@ impl EnvComboCtl {
             return;
         };
         let mut entries = Vec::new();
-        while let Ok(chunk) = rx.try_recv() {
-            self.event_partial.extend_from_slice(&chunk);
-            while self.event_partial.len() >= 16 {
-                let record: Vec<u8> = self.event_partial.drain(..16).collect();
-                let id = u64::from_le_bytes(record[0..8].try_into().unwrap());
-                let ts_ns = i64::from_le_bytes(record[8..16].try_into().unwrap());
-                let seq = self.next_event_seq;
-                self.next_event_seq += 1;
-                entries.push(EventLogEntry::Event {
-                    seq,
-                    label: abi::describe_event_id(id),
-                    ts_ns,
-                    raw: None,
-                });
+        let mut closed = None;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                ssh::StreamEvent::Data(chunk) => {
+                    self.event_partial.extend_from_slice(&chunk);
+                    while self.event_partial.len() >= 16 {
+                        let record: Vec<u8> = self.event_partial.drain(..16).collect();
+                        let id = u64::from_le_bytes(record[0..8].try_into().unwrap());
+                        let ts_ns = i64::from_le_bytes(record[8..16].try_into().unwrap());
+                        let seq = self.next_event_seq;
+                        self.next_event_seq += 1;
+                        entries.push(EventLogEntry::Event {
+                            seq,
+                            label: abi::describe_event_id(id),
+                            ts_ns,
+                            raw: None,
+                        });
 
-                // The event record carries no sample value, so fetch the
-                // currently-latched in_illuminance_raw right away -- while
-                // CONTINUOUS (true here, since an event just fired) that's
-                // a cheap read of the same value the crossing check used,
-                // not a fresh conversion.
-                let (tx, read_rx) = mpsc::channel();
-                ssh::exec_async(
-                    self.cfg.clone(),
-                    format!("cat {}/in_illuminance_raw", device.base),
-                    tx,
-                );
-                self.pending_event_reads.push((seq, read_rx));
+                        // The event record carries no sample value, so fetch the
+                        // currently-latched in_illuminance_raw right away -- while
+                        // CONTINUOUS (true here, since an event just fired) that's
+                        // a cheap read of the same value the crossing check used,
+                        // not a fresh conversion.
+                        let (tx, read_rx) = mpsc::channel();
+                        ssh::exec_async(
+                            self.cfg.clone(),
+                            format!("cat {}/in_illuminance_raw", device.base),
+                            tx,
+                        );
+                        self.pending_event_reads.push((seq, read_rx));
+                    }
+                }
+                ssh::StreamEvent::Closed { status, stderr } => closed = Some((status, stderr)),
             }
         }
         for entry in entries {
             self.push_event_entry(entry);
+        }
+        if let Some((status, stderr)) = closed {
+            self.event_stream = None;
+            self.event_rx = None;
+            let msg = if status == 0 {
+                "-- monitor process exited --".to_string()
+            } else {
+                format!(
+                    "-- monitor process exited (status {status}): {} --",
+                    if stderr.is_empty() { "no output" } else { &stderr }
+                )
+            };
+            self.push_event_entry(EventLogEntry::Marker(msg));
         }
     }
 
@@ -673,9 +700,30 @@ impl EnvComboCtl {
         ui.separator();
         ui.heading("Light vs. sample (live)");
         let points: PlotPoints = self.plot_points.iter().copied().collect::<Vec<_>>().into();
-        Plot::new("light_plot").height(260.0).show(ui, |plot_ui| {
-            plot_ui.line(Line::new(points));
-        });
+        let falling = s.thresh_falling;
+        let rising = s.thresh_rising;
+        Plot::new("light_plot")
+            .height(260.0)
+            .legend(Legend::default())
+            .show(ui, |plot_ui| {
+                plot_ui.line(Line::new(points).name("light"));
+                if let Some(low) = falling {
+                    plot_ui.hline(
+                        HLine::new(low as f64)
+                            .name("falling")
+                            .color(egui::Color32::LIGHT_BLUE)
+                            .style(LineStyle::dashed_loose()),
+                    );
+                }
+                if let Some(high) = rising {
+                    plot_ui.hline(
+                        HLine::new(high as f64)
+                            .name("rising")
+                            .color(egui::Color32::LIGHT_RED)
+                            .style(LineStyle::dashed_loose()),
+                    );
+                }
+            });
     }
 
     fn start_buffer_stream(&mut self) {
@@ -689,11 +737,17 @@ impl EnvComboCtl {
             // checkbox above: the IIO core rejects buffer/enable=1 with no
             // scan elements active, and that failure is otherwise silent
             // (chained with ';', not '&&') -- `dd` would then just block
-            // forever with no data and no visible error.
-            "echo 1 > {base}/scan_elements/in_illuminance_en; \
+            // forever with no data and no visible error. The kill_stray
+            // line clears out any `dd`/evtcat left over from a previous
+            // session that's still holding the chardev open (see
+            // kill_stray_streams_cmd) -- otherwise this `dd` would fail
+            // with EBUSY instead of starting.
+            "{kill_stray}; sleep 0.2; \
+             echo 1 > {base}/scan_elements/in_illuminance_en; \
              echo envcombo-dev0 > {base}/trigger/current_trigger 2>/dev/null; \
              echo 1 > {base}/buffer/enable; \
              dd if={chardev} bs={record_len} 2>/dev/null",
+            kill_stray = abi::kill_stray_streams_cmd(),
             base = device.base,
             chardev = device.chardev,
         );
@@ -722,6 +776,9 @@ impl EnvComboCtl {
                 self.fire("disable buffer", format!("echo 0 > {}/buffer/enable", d.base));
             }
         }
+        // Belt-and-suspenders: make sure the remote dd is actually dead,
+        // not just disconnected from -- see kill_stray_streams_cmd.
+        self.fire("cleanup", abi::kill_stray_streams_cmd());
     }
 
     fn poll_buffer_stream(&mut self) {
@@ -729,19 +786,33 @@ impl EnvComboCtl {
             return;
         };
         let record_len = self.plot_record_len;
-        if record_len == 0 {
-            return;
-        }
-        while let Ok(chunk) = rx.try_recv() {
-            self.buffer_partial.extend_from_slice(&chunk);
-            while self.buffer_partial.len() >= record_len {
-                let record: Vec<u8> = self.buffer_partial.drain(..record_len).collect();
-                let light = u16::from_le_bytes([record[0], record[1]]);
-                self.plot_points.push_back([self.sample_index, light as f64]);
-                self.sample_index += 1.0;
-                while self.plot_points.len() > PLOT_CAP {
-                    self.plot_points.pop_front();
+        let mut closed = None;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                ssh::StreamEvent::Data(chunk) if record_len > 0 => {
+                    self.buffer_partial.extend_from_slice(&chunk);
+                    while self.buffer_partial.len() >= record_len {
+                        let record: Vec<u8> = self.buffer_partial.drain(..record_len).collect();
+                        let light = u16::from_le_bytes([record[0], record[1]]);
+                        self.plot_points.push_back([self.sample_index, light as f64]);
+                        self.sample_index += 1.0;
+                        while self.plot_points.len() > PLOT_CAP {
+                            self.plot_points.pop_front();
+                        }
+                    }
                 }
+                ssh::StreamEvent::Data(_) => {}
+                ssh::StreamEvent::Closed { status, stderr } => closed = Some((status, stderr)),
+            }
+        }
+        if let Some((status, stderr)) = closed {
+            self.buffer_stream = None;
+            self.buffer_rx = None;
+            if status != 0 {
+                self.status_msg = format!(
+                    "buffer stream exited (status {status}): {}",
+                    if stderr.is_empty() { "no output" } else { &stderr }
+                );
             }
         }
     }
@@ -965,13 +1036,16 @@ impl EnvComboCtl {
         let ts_on = self.snapshot.scan_ts_en.unwrap_or(false);
         let record_len = if ts_on { 16 } else { 2 };
         let cmd = format!(
-            // in_illuminance_en forced on -- see start_buffer_stream for why.
-            "echo 1 > {base}/scan_elements/in_illuminance_en; \
+            // in_illuminance_en forced on, kill_stray prepended -- see
+            // start_buffer_stream for why both are needed.
+            "{kill_stray}; sleep 0.2; \
+             echo 1 > {base}/scan_elements/in_illuminance_en; \
              echo envcombo-dev0 > {base}/trigger/current_trigger 2>/dev/null; \
              echo {len} > {base}/buffer/length; \
              echo 1 > {base}/buffer/enable; \
              dd if={chardev} bs={record_len} count={n} 2>/dev/null; \
              echo 0 > {base}/buffer/enable",
+            kill_stray = abi::kill_stray_streams_cmd(),
             base = device.base,
             len = n.max(1),
             chardev = device.chardev,

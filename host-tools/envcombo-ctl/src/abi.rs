@@ -140,6 +140,22 @@ pub struct Device {
 pub const DISCOVER_CMD: &str =
     "grep -l envcombo /sys/bus/iio/devices/iio:device*/name 2>/dev/null | head -n 1";
 
+/// Forcibly kills any stray `dd`/`envcombo-evtcat` left holding
+/// `/dev/iio:deviceN` open from a previous session. The IIO core only
+/// allows one opener of the chardev at a time, and a process blocked in
+/// `read()`/`poll()` on the *device* fd (not the SSH channel) doesn't
+/// notice the channel died until its next I/O on the device -- which, for
+/// a stalled buffer or a quiet event stream, may never come. Run this
+/// before opening the chardev for a new stream so a leftover process from
+/// an earlier session can't cause a confusing EBUSY.
+///
+/// `killall` (matches by process name), not `pkill -f` (matches by full
+/// command line) -- this image's BusyBox build has no `pkill`/`pgrep`
+/// applet at all.
+pub fn kill_stray_streams_cmd() -> String {
+    "killall -9 -q dd envcombo-evtcat 2>/dev/null; true".to_string()
+}
+
 pub fn device_from_discovery(output: &str) -> Option<Device> {
     let name_path = output.trim();
     let base = name_path.strip_suffix("/name")?;

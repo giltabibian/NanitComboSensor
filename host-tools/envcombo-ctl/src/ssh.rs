@@ -149,9 +149,19 @@ impl Stream {
     }
 }
 
+pub enum StreamEvent {
+    Data(Vec<u8>),
+    /// The remote command's stdout closed on its own (not via `Stream::stop`).
+    /// `status` 0 means it ran to completion normally; anything else (most
+    /// commonly 127, "command not found") means it never really started --
+    /// previously this case went completely unreported, leaving a stream
+    /// that looked "running" forever while silently delivering nothing.
+    Closed { status: i32, stderr: String },
+}
+
 /// Connects, execs `cmd`, and returns once the channel is open; reading then
 /// continues on a background thread until EOF, an error, or `Stream::stop`.
-pub fn start_stream(cfg: &Config, cmd: &str, sink: Sender<Vec<u8>>) -> Result<Stream, String> {
+pub fn start_stream(cfg: &Config, cmd: &str, sink: Sender<StreamEvent>) -> Result<Stream, String> {
     let (sess, shutdown_handle) = connect(cfg)?;
     let mut channel = sess
         .channel_session()
@@ -164,9 +174,19 @@ pub fn start_stream(cfg: &Config, cmd: &str, sink: Sender<Vec<u8>>) -> Result<St
         let mut buf = [0u8; 4096];
         loop {
             match channel.read(&mut buf) {
-                Ok(0) => break,
+                Ok(0) => {
+                    let _ = channel.wait_close();
+                    let status = channel.exit_status().unwrap_or(0);
+                    let mut stderr = String::new();
+                    let _ = channel.stderr().read_to_string(&mut stderr);
+                    let _ = sink.send(StreamEvent::Closed {
+                        status,
+                        stderr: stderr.trim().to_string(),
+                    });
+                    return;
+                }
                 Ok(n) => {
-                    if sink.send(buf[..n].to_vec()).is_err() {
+                    if sink.send(StreamEvent::Data(buf[..n].to_vec())).is_err() {
                         break; // UI side gave up listening
                     }
                 }
