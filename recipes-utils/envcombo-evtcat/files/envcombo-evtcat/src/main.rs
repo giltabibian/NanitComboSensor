@@ -21,6 +21,12 @@ use std::time::Duration;
 // From the kernel UAPI (include/uapi/linux/iio): _IOR('i', 0x90, int).
 const IIO_GET_EVENT_FD_IOCTL: libc::c_ulong = 0x8004_6990;
 
+enum OpenErr {
+    /// EBUSY -- worth retrying (see open_event_fd).
+    Busy(String),
+    Other(String),
+}
+
 // A previous instance of this process, killed when its caller (e.g. an SSH
 // channel) was torn down, may not have actually released the chardev yet:
 // SIGKILL is prompt, but it's blocked in poll() on the *event* fd, not on
@@ -29,36 +35,47 @@ const IIO_GET_EVENT_FD_IOCTL: libc::c_ulong = 0x8004_6990;
 // chardev, and that reclaim isn't instantaneous from this process's point
 // of view. Retry EBUSY for up to ~2s rather than failing immediately.
 fn open_event_fd(chardev: &str) -> Result<OwnedFd, String> {
-    let mut last_err = io::Error::new(io::ErrorKind::Other, "never attempted");
+    let mut last_msg = "never attempted".to_string();
     for attempt in 0..20 {
         if attempt > 0 {
             std::thread::sleep(Duration::from_millis(100));
         }
         match try_open_event_fd(chardev) {
             Ok(fd) => return Ok(fd),
-            Err(e) => {
-                let busy = e.kind() == io::ErrorKind::ResourceBusy;
-                last_err = e;
-                if !busy {
-                    break;
-                }
-            }
+            Err(OpenErr::Busy(msg)) => last_msg = msg,
+            Err(OpenErr::Other(msg)) => return Err(msg),
         }
     }
-    Err(last_err.to_string())
+    Err(last_msg)
 }
 
-fn try_open_event_fd(chardev: &str) -> io::Result<OwnedFd> {
-    let dev = File::open(chardev)
-        .map_err(|e| io::Error::new(e.kind(), format!("open {chardev}: {e}")))?;
+// Checking raw_os_error() against libc::EBUSY directly, not
+// io::ErrorKind::ResourceBusy: that variant is gated behind the unstable
+// io_error_more feature on the Rust toolchain this cross-compiles with
+// (older than what's used to develop this on the host), so it doesn't even
+// build there. raw_os_error() is also only available on the *original*
+// io::Error (e.g. straight from last_os_error()) -- it's lost once wrapped
+// in a custom-message io::Error, so the check has to happen here, before
+// formatting, rather than further up the call chain.
+fn try_open_event_fd(chardev: &str) -> Result<OwnedFd, OpenErr> {
+    let dev = File::open(chardev).map_err(|e| {
+        let msg = format!("open {chardev}: {e}");
+        if e.raw_os_error() == Some(libc::EBUSY) {
+            OpenErr::Busy(msg)
+        } else {
+            OpenErr::Other(msg)
+        }
+    })?;
     let mut event_fd: libc::c_int = -1;
     let ret = unsafe { libc::ioctl(dev.as_raw_fd(), IIO_GET_EVENT_FD_IOCTL, &mut event_fd) };
     if ret != 0 || event_fd < 0 {
         let err = io::Error::last_os_error();
-        return Err(io::Error::new(
-            err.kind(),
-            format!("IIO_GET_EVENT_FD_IOCTL on {chardev} failed: {err}"),
-        ));
+        let msg = format!("IIO_GET_EVENT_FD_IOCTL on {chardev} failed: {err}");
+        return Err(if err.raw_os_error() == Some(libc::EBUSY) {
+            OpenErr::Busy(msg)
+        } else {
+            OpenErr::Other(msg)
+        });
     }
     Ok(unsafe { OwnedFd::from_raw_fd(event_fd) })
 }
