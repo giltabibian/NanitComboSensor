@@ -473,7 +473,7 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <li><a href="#_source_layout">2. Source layout</a></li>
 <li><a href="#_connecting">3. Connecting</a></li>
 <li><a href="#_building_running">4. Building &amp; running</a></li>
-<li><a href="#_tabs">5. Tabs</a></li>
+<li><a href="#_sections">5. Sections</a></li>
 <li><a href="#_captureexport_replacing_the_nc_dance">6. Capture/Export: replacing the <code>nc</code> dance</a></li>
 <li><a href="#_troubleshooting">7. Troubleshooting</a></li>
 </ul>
@@ -576,7 +576,7 @@ SSH instead. Two small additions make that possible:</p>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>src/app.rs</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">The <code>eframe::App</code>&#8201;&#8212;&#8201;connection state, the 1-second
-  auto-refresh poll, and the six tabs.</p></td>
+  auto-refresh poll, and the six collapsible sections.</p></td>
 </tr>
 </tbody>
 </table>
@@ -620,14 +620,19 @@ success the tool runs the same discovery the test harness uses
 (<code>grep -l envcombo /sys/bus/iio/devices/iio:device*/name</code>) to find the
 device, then starts a 1-second background poll of every read-only attribute
 (raw/scale/gain/integration time, thresholds, scan_elements, buffer state,
-and the simulator&#8217;s debugfs register file) so every tab stays live without
-needing a manual refresh.</p>
+and the simulator&#8217;s debugfs register file) so every section stays live
+without needing a manual refresh.</p>
 </div>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_tabs">5. Tabs</h2>
+<h2 id="_sections">5. Sections</h2>
 <div class="sectionbody">
+<div class="paragraph">
+<p>One page, six collapsible sections (<code>Channel</code>/<code>Events</code>/<code>Buffer</code> open by
+default, <code>State</code>/<code>Simulator</code>/<code>Capture / Export</code> collapsed)&#8201;&#8212;&#8201;nothing is
+behind a tab switch, just folded out of the way until you need it.</p>
+</div>
 <table class="tableblock frame-all grid-all stretch">
 <colgroup>
 <col style="width: 20%;">
@@ -635,7 +640,7 @@ needing a manual refresh.</p>
 </colgroup>
 <thead>
 <tr>
-<th class="tableblock halign-left valign-top">Tab</th>
+<th class="tableblock halign-left valign-top">Section</th>
 <th class="tableblock halign-left valign-top">Covers</th>
 </tr>
 </thead>
@@ -655,9 +660,15 @@ needing a manual refresh.</p>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Buffer</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>scan_elements/in_illuminance_en</code> / <code>in_timestamp_en</code>, <code>buffer/length</code>,
-  <code>buffer/enable</code>, and a live light-vs-sample plot streamed from
-  <code>/dev/iio:deviceN</code> via <code>dd</code>.</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>scan_elements/in_illuminance_en</code> / <code>in_timestamp_en</code> and <code>buffer/length</code>
+  (used by the triggered-buffer capture in Capture/Export below), plus a
+  live light-vs-sample plot. The plot polls <code>in_illuminance_raw</code> over plain
+  sysfs every ~250ms rather than streaming <code>/dev/iio:deviceN</code> with <code>dd</code>:
+  the IIO core only allows one opener of that chardev at a time, and a
+  continuous <code>dd</code> would hold it for as long as the plot ran, permanently
+  locking out the Events section&#8217;s <code>envcombo-evtcat</code> (which needs the same
+  chardev briefly, to bootstrap its event fd). Polling sysfs instead means
+  the live plot and the event monitor can run at the same time.</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock">State</p></td>
@@ -676,7 +687,10 @@ needing a manual refresh.</p>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Capture / Export</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">One-click capture of the register snapshot or N buffer records straight
   to a local <code>.bin</code> file (see below), plus <code>modprobe</code>/<code>rmmod</code> convenience
-  buttons for both modules.</p></td>
+  buttons for both modules. The buffer-record capture still uses <code>dd</code>
+  against <code>/dev/iio:deviceN</code>&#8201;&#8212;&#8201;it&#8217;s a short, bounded, one-shot operation,
+  not a continuous hold on the chardev, so it doesn&#8217;t have the Buffer
+  section live-plot&#8217;s conflict with a running event monitor.</p></td>
 </tr>
 </tbody>
 </table>
@@ -689,7 +703,7 @@ needing a manual refresh.</p>
 <p><a href="debugging.html">Manual Debugging &amp; Binary Inspection</a> captures bytes
 for ImHex by starting a one-shot <code>nc</code> listener on the host and having the
 guest <code>nc</code> the blob out through the slirp gateway. With SSH available, the
-Capture/Export tab does the same job in one click: it pulls the bytes over
+Capture/Export section does the same job in one click: it pulls the bytes over
 the already-open SSH connection and writes them directly to a local
 directory (the <strong>export directory</strong> field&#8201;&#8212;&#8201;point it at a Windows-visible
 path such as <code>/mnt/c/Users/&lt;user&gt;/</code> to open the result straight in ImHex,
@@ -739,23 +753,30 @@ responsive while it waits.</p>
   <code>ssh-server-dropbear</code>.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Connected, but every tab says no device found</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Connected, but every section says no device found</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Both kernel modules need to be loaded first&#8201;&#8212;&#8201;use the Capture/Export
-  tab&#8217;s <strong>modprobe</strong> button, or <code>modprobe i2c-envcombo-sim &amp;&amp; modprobe
+  section&#8217;s <strong>modprobe</strong> button, or <code>modprobe i2c-envcombo-sim &amp;&amp; modprobe
   envcombo</code> on the target.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Events tab never logs anything</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Events section never logs anything</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>envcombo-evtcat</code> must be on the target&#8217;s <code>PATH</code> (installed by the
   <code>envcombo-evtcat</code> package); also confirm <code>thresh_either_en</code> is on and the
-  threshold window is actually crossable from the current raw value.</p></td>
+  threshold window is actually crossable from the current raw value. If a
+  live event ever did arrive but the log then goes quiet permanently after
+  a Stop/Start cycle with <code>Device or resource busy</code> showing up, that&#8217;s a
+  stale <code>dd</code> from the Capture/Export buffer capture (or, before this was
+  fixed, the old <code>dd</code>-based live plot) still holding <code>/dev/iio:deviceN</code>
+  open&#8201;&#8212;&#8201;the Events section&#8217;s own stray-process cleanup only ever targets
+  <code>envcombo-evtcat</code>, never <code>dd</code>, so it won&#8217;t clear that on its own; stop
+  whatever started the <code>dd</code> first.</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Buffer plot is flat or empty</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>scan_elements/in_illuminance_en</code> must be on before clicking <strong>Enable
-  buffer</strong>; toggling <code>in_timestamp_en</code> while a stream is active doesn&#8217;t
-  change the record size mid-stream&#8201;&#8212;&#8201;stop and restart the plot after
-  changing it.</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Connect status must show a device (the plot polls <code>in_illuminance_raw</code>
+  over sysfs, independent of <code>scan_elements</code>); if a one-shot conversion is
+  timing out you&#8217;d see that surfaced as an error instead, via the same
+  status line export/channel errors use.</p></td>
 </tr>
 </tbody>
 </table>
@@ -764,7 +785,7 @@ responsive while it waits.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-21 19:19:27 +0300
+Last updated 2026-06-21 22:28:06 +0300
 </div>
 </div>
 </body>

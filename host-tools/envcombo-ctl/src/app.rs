@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 const SNAPSHOT_INTERVAL: Duration = Duration::from_millis(1000);
 const EVENT_LOG_CAP: usize = 200;
 const PLOT_CAP: usize = 500;
+const PLOT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(PartialEq, Clone, Copy)]
 enum ConnStatus {
@@ -72,11 +73,11 @@ pub struct EnvComboCtl {
 
     buffer_len_buf: String,
     plot_points: VecDeque<[f64; 2]>,
-    plot_record_len: usize,
     sample_index: f64,
-    buffer_stream: Option<ssh::Stream>,
-    buffer_rx: Option<Receiver<ssh::StreamEvent>>,
-    buffer_partial: Vec<u8>,
+    plot_active: bool,
+    plot_poll_inflight: bool,
+    plot_poll_rx: Option<Receiver<Result<Vec<u8>, String>>>,
+    last_plot_poll: Instant,
 
     export_dir: String,
     export_count_buf: String,
@@ -119,11 +120,11 @@ impl Default for EnvComboCtl {
 
             buffer_len_buf: "64".to_string(),
             plot_points: VecDeque::new(),
-            plot_record_len: 0,
             sample_index: 0.0,
-            buffer_stream: None,
-            buffer_rx: None,
-            buffer_partial: Vec::new(),
+            plot_active: false,
+            plot_poll_inflight: false,
+            plot_poll_rx: None,
+            last_plot_poll: Instant::now(),
 
             export_dir: ".".to_string(),
             export_count_buf: "64".to_string(),
@@ -142,7 +143,7 @@ impl eframe::App for EnvComboCtl {
         self.poll_snapshot();
         self.poll_event_stream();
         self.poll_pending_event_reads();
-        self.poll_buffer_stream();
+        self.poll_live_plot();
         self.poll_export();
 
         egui::TopBottomPanel::top("connection").show(ctx, |ui| self.connection_bar(ui));
@@ -170,7 +171,7 @@ impl eframe::App for EnvComboCtl {
             });
         });
 
-        let live = self.event_stream.is_some() || self.buffer_stream.is_some();
+        let live = self.event_stream.is_some() || self.plot_active;
         ctx.request_repaint_after(Duration::from_millis(if live { 80 } else { 250 }));
     }
 }
@@ -256,11 +257,9 @@ impl EnvComboCtl {
         if let Some(s) = self.event_stream.take() {
             s.stop();
         }
-        if let Some(s) = self.buffer_stream.take() {
-            s.stop();
-        }
         self.event_rx = None;
-        self.buffer_rx = None;
+        self.plot_active = false;
+        self.plot_poll_rx = None;
         self.device = None;
         self.status = ConnStatus::Disconnected;
         self.status_msg.clear();
@@ -642,6 +641,13 @@ impl EnvComboCtl {
         let s = self.snapshot.clone();
 
         ui.heading("Scan elements & buffer");
+        ui.weak(
+            "Used by Capture/Export's triggered-buffer capture below, not by the \
+             live plot -- the live plot polls in_illuminance_raw over sysfs instead, \
+             so it can run at the same time as the event monitor (the IIO core only \
+             allows one opener of /dev/iio:deviceN, which a continuous dd-based plot \
+             would hold for as long as it ran).",
+        );
         ui.horizontal(|ui| {
             let mut illum = s.scan_illum_en.unwrap_or(false);
             if ui.checkbox(&mut illum, "in_illuminance_en").changed() {
@@ -689,12 +695,12 @@ impl EnvComboCtl {
         ));
 
         ui.horizontal(|ui| {
-            if self.buffer_stream.is_none() {
-                if ui.button("Enable buffer + start live plot").clicked() {
-                    self.start_buffer_stream();
+            if !self.plot_active {
+                if ui.button("Start live plot").clicked() {
+                    self.start_live_plot();
                 }
-            } else if ui.button("Disable buffer / stop plot").clicked() {
-                self.stop_buffer_stream(true);
+            } else if ui.button("Stop live plot").clicked() {
+                self.stop_live_plot();
             }
         });
 
@@ -727,97 +733,72 @@ impl EnvComboCtl {
             });
     }
 
-    fn start_buffer_stream(&mut self) {
+    fn start_live_plot(&mut self) {
+        self.plot_points.clear();
+        self.sample_index = 0.0;
+        self.plot_active = true;
+        self.plot_poll_rx = None;
+        self.plot_poll_inflight = false;
+        // Poll immediately on the next frame rather than waiting out a full
+        // PLOT_POLL_INTERVAL first.
+        self.last_plot_poll = Instant::now() - PLOT_POLL_INTERVAL;
+    }
+
+    fn stop_live_plot(&mut self) {
+        self.plot_active = false;
+        self.plot_poll_rx = None;
+        self.plot_poll_inflight = false;
+    }
+
+    // Polls in_illuminance_raw over plain sysfs rather than streaming the
+    // buffer chardev with `dd`: a continuous `dd` holds /dev/iio:deviceN
+    // open for as long as the plot runs, and the IIO core only allows one
+    // opener of that chardev at a time -- so a dd-based live plot and the
+    // event monitor (which needs the same chardev, briefly, to bootstrap
+    // its event fd) could never run together. Plain sysfs reads don't
+    // touch the chardev at all, so this sidesteps the conflict entirely.
+    fn poll_live_plot(&mut self) {
+        if !self.plot_active {
+            return;
+        }
         let Some(device) = self.device.clone() else {
             return;
         };
-        let ts_on = self.snapshot.scan_ts_en.unwrap_or(false);
-        let record_len = if ts_on { 16 } else { 2 };
-        let cmd = format!(
-            // in_illuminance_en is forced on here rather than left to the
-            // checkbox above: the IIO core rejects buffer/enable=1 with no
-            // scan elements active, and that failure is otherwise silent
-            // (chained with ';', not '&&') -- `dd` would then just block
-            // forever with no data and no visible error. The kill_stray
-            // line clears out any `dd` left over from a previous session
-            // that's still holding the chardev open (see
-            // kill_stray_dd_cmd) -- otherwise this `dd` would fail with
-            // EBUSY instead of starting. Must not also kill envcombo-evtcat
-            // here -- an event monitor may be running concurrently.
-            "{kill_stray}; sleep 0.2; \
-             echo 1 > {base}/scan_elements/in_illuminance_en; \
-             echo envcombo-dev0 > {base}/trigger/current_trigger 2>/dev/null; \
-             echo 1 > {base}/buffer/enable; \
-             dd if={chardev} bs={record_len} 2>/dev/null",
-            kill_stray = abi::kill_stray_dd_cmd(),
-            base = device.base,
-            chardev = device.chardev,
-        );
-
-        let (tx, rx) = mpsc::channel();
-        match ssh::start_stream(&self.cfg, &cmd, tx) {
-            Ok(stream) => {
-                self.buffer_stream = Some(stream);
-                self.buffer_rx = Some(rx);
-                self.buffer_partial.clear();
-                self.plot_points.clear();
-                self.plot_record_len = record_len;
-                self.sample_index = 0.0;
-            }
-            Err(e) => self.status_msg = format!("buffer stream: {e}"),
-        }
-    }
-
-    fn stop_buffer_stream(&mut self, also_disable_device_buffer: bool) {
-        if let Some(s) = self.buffer_stream.take() {
-            s.stop();
-        }
-        self.buffer_rx = None;
-        if also_disable_device_buffer {
-            if let Some(d) = &self.device {
-                self.fire("disable buffer", format!("echo 0 > {}/buffer/enable", d.base));
-            }
-        }
-        // Belt-and-suspenders: make sure the remote dd is actually dead,
-        // not just disconnected from -- see kill_stray_dd_cmd. Must not
-        // touch envcombo-evtcat -- an event monitor may be running
-        // concurrently.
-        self.fire("cleanup", abi::kill_stray_dd_cmd());
-    }
-
-    fn poll_buffer_stream(&mut self) {
-        let Some(rx) = &self.buffer_rx else {
-            return;
-        };
-        let record_len = self.plot_record_len;
-        let mut closed = None;
-        while let Ok(event) = rx.try_recv() {
-            match event {
-                ssh::StreamEvent::Data(chunk) if record_len > 0 => {
-                    self.buffer_partial.extend_from_slice(&chunk);
-                    while self.buffer_partial.len() >= record_len {
-                        let record: Vec<u8> = self.buffer_partial.drain(..record_len).collect();
-                        let light = u16::from_le_bytes([record[0], record[1]]);
+        if let Some(rx) = &self.plot_poll_rx {
+            match rx.try_recv() {
+                Ok(Ok(bytes)) => {
+                    if let Ok(light) = String::from_utf8_lossy(&bytes).trim().parse::<u16>() {
                         self.plot_points.push_back([self.sample_index, light as f64]);
                         self.sample_index += 1.0;
                         while self.plot_points.len() > PLOT_CAP {
                             self.plot_points.pop_front();
                         }
                     }
+                    self.plot_poll_inflight = false;
+                    self.plot_poll_rx = None;
                 }
-                ssh::StreamEvent::Data(_) => {}
-                ssh::StreamEvent::Closed { status, stderr } => closed = Some((status, stderr)),
+                Ok(Err(e)) => {
+                    self.status_msg = format!("live plot: {e}");
+                    self.plot_poll_inflight = false;
+                    self.plot_poll_rx = None;
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    self.plot_poll_inflight = false;
+                    self.plot_poll_rx = None;
+                }
             }
         }
-        if let Some((status, stderr)) = closed {
-            self.buffer_stream = None;
-            self.buffer_rx = None;
-            if status != 0 {
-                self.status_msg = format!(
-                    "buffer stream exited (status {status}): {}",
-                    if stderr.is_empty() { "no output" } else { &stderr }
-                );
-            }
+        if !self.plot_poll_inflight && self.last_plot_poll.elapsed() >= PLOT_POLL_INTERVAL {
+            let (tx, rx) = mpsc::channel();
+            ssh::exec_async(
+                self.cfg.clone(),
+                format!("cat {}/in_illuminance_raw", device.base),
+                tx,
+            );
+            self.plot_poll_rx = Some(rx);
+            self.plot_poll_inflight = true;
+            self.last_plot_poll = Instant::now();
         }
     }
 
