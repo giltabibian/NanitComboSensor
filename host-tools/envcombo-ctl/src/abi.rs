@@ -120,9 +120,11 @@ pub struct Device {
     pub chardev: String, // /dev/iio:deviceN
 }
 
-/// Shell one-liner that finds the envcombo IIO device, run once after connect.
+/// Shell one-liner that finds the envcombo IIO device, run once after
+/// connect. `-n 1`, not the GNU shorthand `-1` -- the target's BusyBox
+/// `head` doesn't accept the latter.
 pub const DISCOVER_CMD: &str =
-    "grep -l envcombo /sys/bus/iio/devices/iio:device*/name 2>/dev/null | head -1";
+    "grep -l envcombo /sys/bus/iio/devices/iio:device*/name 2>/dev/null | head -n 1";
 
 pub fn device_from_discovery(output: &str) -> Option<Device> {
     let name_path = output.trim();
