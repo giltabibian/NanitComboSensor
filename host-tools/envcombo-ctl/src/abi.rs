@@ -140,20 +140,51 @@ pub struct Device {
 pub const DISCOVER_CMD: &str =
     "grep -l envcombo /sys/bus/iio/devices/iio:device*/name 2>/dev/null | head -n 1";
 
-/// Forcibly kills any stray `dd`/`envcombo-evtcat` left holding
-/// `/dev/iio:deviceN` open from a previous session. The IIO core only
-/// allows one opener of the chardev at a time, and a process blocked in
-/// `read()`/`poll()` on the *device* fd (not the SSH channel) doesn't
-/// notice the channel died until its next I/O on the device -- which, for
-/// a stalled buffer or a quiet event stream, may never come. Run this
-/// before opening the chardev for a new stream so a leftover process from
-/// an earlier session can't cause a confusing EBUSY.
+/// Shell loop that kills every process whose `/proc/<pid>/comm` matches
+/// `name`, signal 9. Deliberately not `killall`/`pkill -f`: BusyBox builds
+/// vary in which of those applets they include at all (this image's has
+/// neither `pkill` nor `pgrep`, discovered the hard way), whereas `/proc`,
+/// `cat`, `kill` and basic shell are guaranteed.
+fn kill_by_comm_cmd(name: &str) -> String {
+    format!(
+        "for p in /proc/[0-9]*; do \
+           n=$(cat $p/comm 2>/dev/null); \
+           [ \"$n\" = \"{name}\" ] && kill -9 ${{p#/proc/}} 2>/dev/null; \
+         done; true"
+    )
+}
+
+/// Forcibly kills any stray `dd` left holding `/dev/iio:deviceN` open from
+/// a previous buffer-stream session. The IIO core only allows one opener
+/// of the chardev at a time, and `dd` blocked in `read()` on the *device*
+/// fd (not the SSH channel) doesn't notice the channel died until its next
+/// I/O on the device -- which, if the buffer stalled, may never come. Run
+/// this before opening the chardev for a new buffer stream so a leftover
+/// `dd` from an earlier session can't cause a confusing EBUSY.
 ///
-/// `killall` (matches by process name), not `pkill -f` (matches by full
-/// command line) -- this image's BusyBox build has no `pkill`/`pgrep`
-/// applet at all.
-pub fn kill_stray_streams_cmd() -> String {
-    "killall -9 -q dd envcombo-evtcat 2>/dev/null; true".to_string()
+/// Targets only `dd`, never `envcombo-evtcat`: an event monitor may be
+/// running at the same time and must not be collateral damage here (it
+/// only needs the chardev briefly, to bootstrap its event fd -- see
+/// kill_stray_evtcat_cmd's doc comment for the full picture).
+pub fn kill_stray_dd_cmd() -> String {
+    kill_by_comm_cmd("dd")
+}
+
+/// Same idea as `kill_stray_dd_cmd`, for a stale `envcombo-evtcat` left
+/// over from a previous event-monitor session. Targets only
+/// `envcombo-evtcat`, never `dd` -- a buffer stream may be running at the
+/// same time and must not be killed just because the event monitor is
+/// (re)starting.
+///
+/// Ordering note: the event monitor only needs `/dev/iio:deviceN` open
+/// *briefly*, to issue `IIO_GET_EVENT_FD_IOCTL`, then it operates entirely
+/// off the independent event fd that returns -- so starting the event
+/// monitor first and the buffer stream second lets both run concurrently.
+/// Starting the buffer stream first means its `dd` holds the chardev open
+/// continuously, and the event monitor's later open() will fail with
+/// EBUSY until that `dd` stops.
+pub fn kill_stray_evtcat_cmd() -> String {
+    kill_by_comm_cmd("envcombo-evtcat")
 }
 
 pub fn device_from_discovery(output: &str) -> Option<Device> {

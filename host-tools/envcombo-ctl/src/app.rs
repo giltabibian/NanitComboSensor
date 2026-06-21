@@ -519,7 +519,7 @@ impl EnvComboCtl {
         let (tx, rx) = mpsc::channel();
         let cmd = format!(
             "{}; sleep 0.2; envcombo-evtcat {}",
-            abi::kill_stray_streams_cmd(),
+            abi::kill_stray_evtcat_cmd(),
             device.chardev
         );
         match ssh::start_stream(&self.cfg, &cmd, tx) {
@@ -539,8 +539,9 @@ impl EnvComboCtl {
         }
         self.event_rx = None;
         // Belt-and-suspenders: make sure the remote process is actually
-        // dead, not just disconnected from -- see kill_stray_streams_cmd.
-        self.fire("cleanup", abi::kill_stray_streams_cmd());
+        // dead, not just disconnected from -- see kill_stray_evtcat_cmd.
+        // Must not touch dd -- a buffer stream may be running concurrently.
+        self.fire("cleanup", abi::kill_stray_evtcat_cmd());
         self.push_event_entry(EventLogEntry::Marker("-- monitor stopped --".to_string()));
     }
 
@@ -738,16 +739,17 @@ impl EnvComboCtl {
             // scan elements active, and that failure is otherwise silent
             // (chained with ';', not '&&') -- `dd` would then just block
             // forever with no data and no visible error. The kill_stray
-            // line clears out any `dd`/evtcat left over from a previous
-            // session that's still holding the chardev open (see
-            // kill_stray_streams_cmd) -- otherwise this `dd` would fail
-            // with EBUSY instead of starting.
+            // line clears out any `dd` left over from a previous session
+            // that's still holding the chardev open (see
+            // kill_stray_dd_cmd) -- otherwise this `dd` would fail with
+            // EBUSY instead of starting. Must not also kill envcombo-evtcat
+            // here -- an event monitor may be running concurrently.
             "{kill_stray}; sleep 0.2; \
              echo 1 > {base}/scan_elements/in_illuminance_en; \
              echo envcombo-dev0 > {base}/trigger/current_trigger 2>/dev/null; \
              echo 1 > {base}/buffer/enable; \
              dd if={chardev} bs={record_len} 2>/dev/null",
-            kill_stray = abi::kill_stray_streams_cmd(),
+            kill_stray = abi::kill_stray_dd_cmd(),
             base = device.base,
             chardev = device.chardev,
         );
@@ -777,8 +779,10 @@ impl EnvComboCtl {
             }
         }
         // Belt-and-suspenders: make sure the remote dd is actually dead,
-        // not just disconnected from -- see kill_stray_streams_cmd.
-        self.fire("cleanup", abi::kill_stray_streams_cmd());
+        // not just disconnected from -- see kill_stray_dd_cmd. Must not
+        // touch envcombo-evtcat -- an event monitor may be running
+        // concurrently.
+        self.fire("cleanup", abi::kill_stray_dd_cmd());
     }
 
     fn poll_buffer_stream(&mut self) {
@@ -1037,7 +1041,9 @@ impl EnvComboCtl {
         let record_len = if ts_on { 16 } else { 2 };
         let cmd = format!(
             // in_illuminance_en forced on, kill_stray prepended -- see
-            // start_buffer_stream for why both are needed.
+            // start_buffer_stream for why both are needed. Only dd, not
+            // envcombo-evtcat -- an event monitor may be running
+            // concurrently.
             "{kill_stray}; sleep 0.2; \
              echo 1 > {base}/scan_elements/in_illuminance_en; \
              echo envcombo-dev0 > {base}/trigger/current_trigger 2>/dev/null; \
@@ -1045,7 +1051,7 @@ impl EnvComboCtl {
              echo 1 > {base}/buffer/enable; \
              dd if={chardev} bs={record_len} count={n} 2>/dev/null; \
              echo 0 > {base}/buffer/enable",
-            kill_stray = abi::kill_stray_streams_cmd(),
+            kill_stray = abi::kill_stray_dd_cmd(),
             base = device.base,
             len = n.max(1),
             chardev = device.chardev,

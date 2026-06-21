@@ -16,18 +16,48 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
 use std::process::ExitCode;
+use std::time::Duration;
 
 // From the kernel UAPI (include/uapi/linux/iio): _IOR('i', 0x90, int).
 const IIO_GET_EVENT_FD_IOCTL: libc::c_ulong = 0x8004_6990;
 
+// A previous instance of this process, killed when its caller (e.g. an SSH
+// channel) was torn down, may not have actually released the chardev yet:
+// SIGKILL is prompt, but it's blocked in poll() on the *event* fd, not on
+// anything tied to the channel, so it has no chance to notice the channel
+// died until it next touches it -- the kill is what actually reclaims the
+// chardev, and that reclaim isn't instantaneous from this process's point
+// of view. Retry EBUSY for up to ~2s rather than failing immediately.
 fn open_event_fd(chardev: &str) -> Result<OwnedFd, String> {
-    let dev = File::open(chardev).map_err(|e| format!("open {chardev}: {e}"))?;
+    let mut last_err = io::Error::new(io::ErrorKind::Other, "never attempted");
+    for attempt in 0..20 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        match try_open_event_fd(chardev) {
+            Ok(fd) => return Ok(fd),
+            Err(e) => {
+                let busy = e.kind() == io::ErrorKind::ResourceBusy;
+                last_err = e;
+                if !busy {
+                    break;
+                }
+            }
+        }
+    }
+    Err(last_err.to_string())
+}
+
+fn try_open_event_fd(chardev: &str) -> io::Result<OwnedFd> {
+    let dev = File::open(chardev)
+        .map_err(|e| io::Error::new(e.kind(), format!("open {chardev}: {e}")))?;
     let mut event_fd: libc::c_int = -1;
     let ret = unsafe { libc::ioctl(dev.as_raw_fd(), IIO_GET_EVENT_FD_IOCTL, &mut event_fd) };
     if ret != 0 || event_fd < 0 {
-        return Err(format!(
-            "IIO_GET_EVENT_FD_IOCTL on {chardev} failed: {}",
-            io::Error::last_os_error()
+        let err = io::Error::last_os_error();
+        return Err(io::Error::new(
+            err.kind(),
+            format!("IIO_GET_EVENT_FD_IOCTL on {chardev} failed: {err}"),
         ));
     }
     Ok(unsafe { OwnedFd::from_raw_fd(event_fd) })
