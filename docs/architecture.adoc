@@ -27,6 +27,20 @@ hardware exposing the same register map.
 
 image::diagrams/svg/system-overview.svg[System overview block diagram]
 
+The diagram shows two distinct communication paths between the device and the
+SoC:
+
+* *I2C bus* (SDA + SCL) -- the driver's only active path; all register reads
+  and writes go here.
+* *INT pin* -- a dedicated physical wire, separate from I2C, that the device
+  asserts to interrupt the CPU. The driver never reads or writes this pin;
+  the SoC's interrupt controller detects its edge and wakes the IRQ thread.
+
+`INT_CFG` (register `0x07`) configures how the INT pin behaves (`INT_EN`,
+`INT_POL`, `INT_LATCH`), but the pin itself is not part of the I2C bus.
+When the device has data or a threshold crossing to report, it drives INT
+low -- the IRQ thread then reads `STATUS` over I2C to learn what happened.
+
 == Hardware Model (ALS-relevant subset)
 
 === Register map
@@ -79,6 +93,18 @@ selected by `INT_POL` (0 = active-low, the power-on default). `INT_LATCH=1`
 keeps `ALS_INT` set until STATUS is read even if the value returns in-range;
 with `INT_LATCH=0` the flag self-clears, which can lose events (see
 <<design-decisions>>).
++
+Note the intentional opposition: STATUS bits go `0 -> 1` when an event fires
+(register flag convention: `1` = yes), while the physical INT pin goes
+`HIGH -> LOW` (active-low electrical convention). They are two different
+representations of the same event -- a bit value and a voltage level -- and
+they move in opposite directions by design.
++
+----
+Event fires
+  STATUS bit: 0 → 1   (flag set: "event occurred")
+  INT pin:    HIGH → LOW  (active-low pulse to the CPU)
+----
 
 == Driver Architecture
 
@@ -198,8 +224,9 @@ image::diagrams/svg/buffer-flow-seq.svg[Triggered buffer capture sequence]
 == Design Decisions & Tradeoffs
 
 Plain `i2c_smbus` instead of regmap::
-The device has 19 byte-wide registers and the driver touches 11 of them; a
-regmap adds little. Decisive practical point: `CONFIG_REGMAP_I2C` is a
+The device has 19 byte-wide registers and the driver touches 13 of them (the
+other 6 are temperature/humidity registers, out of scope here); a regmap
+adds little. Decisive practical point: `CONFIG_REGMAP_I2C` is a
 hidden Kconfig symbol that in-tree drivers pull in via `select`, which an
 out-of-tree module cannot do cleanly. Register caching would be wrong
 anyway (STATUS is clear-on-read, ALS_OUT is hardware-latched).

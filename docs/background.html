@@ -5,7 +5,7 @@
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="generator" content="Asciidoctor 2.0.16">
-<title>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Test Harness</title>
+<title>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Background</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Open+Sans:300,300italic,400,400italic,600,600italic%7CNoto+Serif:400,400italic,700,700italic%7CDroid+Sans+Mono:400,700">
 <style>
 /*! Asciidoctor default stylesheet | MIT License | https://asciidoctor.org */
@@ -465,14 +465,19 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </head>
 <body class="article">
 <div id="header">
-<h1>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Test Harness</h1>
+<h1>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Background</h1>
 <div id="toc" class="toc">
 <div id="toctitle">Table of Contents</div>
 <ul class="sectlevel1">
-<li><a href="#_test_stack">1. Test stack</a></li>
-<li><a href="#_test_plan">2. Test plan</a></li>
-<li><a href="#_robustness_of_the_harness_itself">3. Robustness of the harness itself</a></li>
-<li><a href="#_interpreting_results">4. Interpreting results</a></li>
+<li><a href="#_iio_industrial_io">1. IIO (Industrial I/O)</a>
+<ul class="sectlevel2">
+<li><a href="#_driver_structure">1.1. Driver structure</a></li>
+<li><a href="#_userspace_interface">1.2. Userspace interface</a></li>
+<li><a href="#_buffering_and_triggers">1.3. Buffering and triggers</a></li>
+<li><a href="#_iio_vs_hwmon">1.4. IIO vs hwmon</a></li>
+</ul>
+</li>
+<li><a href="#_i2c_and_smbus">2. I2C and SMBus</a></li>
 </ul>
 </div>
 </div>
@@ -483,291 +488,176 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <p><a href="index.html">&#8592; Back to documentation index</a></p>
 </div>
 <div class="paragraph">
-<p>The test harness (<code>recipes-utils/envcombo-test/files/envcombo-test/src/main.rs</code>)
-is a single Rust binary, <code>envcombo-test</code>, that exercises the driver
-end-to-end through its real userspace ABI and reports a PASS/FAIL verdict
-per capability. It runs on the target (QEMU or hardware), needs root, and
-uses only <code>libc</code> beyond the standard library&#8201;&#8212;&#8201;pragmatically chosen so the
-image needs no extra runtime and the cargo recipe stays trivially
-fetchable.</p>
+<p>This page provides background on the Linux frameworks and protocols used by
+this assignment. It is not specific to the <code>envcombo</code> driver&#8201;&#8212;&#8201;consult
+<a href="architecture.html">Architecture &amp; Design</a> for driver-specific details.</p>
 </div>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_test_stack">1. Test stack</h2>
+<h2 id="_iio_industrial_io">1. IIO (Industrial I/O)</h2>
 <div class="sectionbody">
-<div class="imageblock">
+<div class="paragraph">
+<p>IIO is a Linux kernel subsystem that provides a standardized interface for
+sensors and data-acquisition devices: accelerometers, gyroscopes,
+temperature/humidity sensors, ambient-light sensors, ADCs, pressure sensors,
+and more.</p>
+</div>
+<div class="paragraph">
+<p>Without IIO every driver would expose its own ad-hoc sysfs layout. With IIO a
+light reading always appears at <code>in_illuminance_input</code>, a temperature reading at
+<code>in_temp_input</code>, etc.&#8201;&#8212;&#8201;consistently across all vendors and drivers.</p>
+</div>
+<div class="sect2">
+<h3 id="_driver_structure">1.1. Driver structure</h3>
+<div class="paragraph">
+<p>The driver allocates an <code>iio_dev</code>, declares one <code>iio_chan_spec</code> entry per
+measurement type, and registers a <code>read_raw</code> callback:</p>
+</div>
+<div class="listingblock">
 <div class="content">
-<img src="diagrams/svg/test-stack.svg" alt="Test stack block diagram">
+<pre class="highlight"><code class="language-c" data-lang="c">static const struct iio_chan_spec sensor_channels[] = {
+    { .type = IIO_LIGHT },
+    { .type = IIO_TEMP  },
+};
+
+static int sensor_read_raw(struct iio_dev *indio_dev,
+                           struct iio_chan_spec const *chan,
+                           int *val, int *val2, long mask)
+{
+    switch (chan-&gt;type) {
+    case IIO_LIGHT:
+        *val = read_als_from_hw();
+        return IIO_VAL_INT;
+    /* ... */
+    }
+}</code></pre>
 </div>
 </div>
 <div class="paragraph">
-<p>Three properties make the tests able to fail when behavior is wrong, rather
-than being superficial smoke checks:</p>
-</div>
-<div class="dlist">
-<dl>
-<dt class="hdlist1">Independent ground truth</dt>
-<dd>
-<p>The simulator exposes its raw register file at
-<code>/sys/kernel/debug/envcombo-sim/regs</code> (a side-effect-free snapshot&#8201;&#8212;&#8201;unlike an I2C STATUS read it clears nothing). Wherever the driver claims
-something via sysfs, the harness <strong>also</strong> asserts what actually landed in the
-device registers: CFG gain/time fields, both threshold register pairs,
-and the PWR_MODE register for every power-state assertion.</p>
-</dd>
-<dt class="hdlist1">Negative testing</dt>
-<dd>
-<p>Every validation path is exercised with inputs that must be rejected
-(unsupported gain, unsupported integration time, inverted threshold
-window, out-of-range and negative thresholds), and the harness then proves
-the rejected write left no side effects.</p>
-</dd>
-<dt class="hdlist1">Kernel-log health gate</dt>
-<dd>
-<p>The final test scans <code>dmesg</code> for <code>WARNING:</code> / <code>BUG:</code> / <code>Oops</code> /
-<code>refcount_t:</code> / <code>Call trace:</code> lines. A kernel splat fails the run even when
-the operation that caused it appeared to succeed&#8201;&#8212;&#8201;this is the test that
-caught a trigger refcount double-put on <code>rmmod</code> and an
-<code>iio_trigger_poll()</code>-from-thread-context bug during development.</p>
-</dd>
-</dl>
+<p>The framework calls <code>read_raw</code> whenever userspace reads a sysfs attribute and
+generates the attribute files automatically from the channel definitions.</p>
 </div>
 </div>
-</div>
-<div class="sect1">
-<h2 id="_test_plan">2. Test plan</h2>
-<div class="sectionbody">
+<div class="sect2">
+<h3 id="_userspace_interface">1.2. Userspace interface</h3>
 <div class="paragraph">
-<p>The 15 tests run one at a time (never concurrently); the exit code is 0 only
-if every test passes.</p>
+<p>After the driver loads:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre>/sys/bus/iio/devices/iio:device0/in_illuminance_raw
+/sys/bus/iio/devices/iio:device0/in_temp_input
+/sys/bus/iio/devices/iio:device0/in_humidityrelative_input</pre>
+</div>
 </div>
 <div class="paragraph">
-<p>The <strong>order</strong>, though, is deliberately randomized rather than fixed:
-<code>module-loading</code> always runs first and <code>module-unloading</code> /
-<code>kernel-log-health</code> always run last, but the device tests in between are
-shuffled by a seeded PRNG on every run. Each device test calls
-<code>reset_baseline()</code> first (and the configuration tests restore the defaults
-they started from), so the suite is order-independent by construction&#8201;&#8212;&#8201;the
-shuffle is what actively proves that isolation holds, rather than the suite
-quietly depending on a fixed order. The seed is printed at startup and can be
-pinned with <code>--seed=N</code> or <code>ENVCOMBO_TEST_SEED=N</code> to replay a specific order
-deterministically. The numbering in the table below is the source order in
-which the tests are listed, not the order they run in.</p>
-</div>
-<table class="tableblock frame-all grid-all stretch">
-<colgroup>
-<col style="width: 11.1111%;">
-<col style="width: 33.3333%;">
-<col style="width: 55.5556%;">
-</colgroup>
-<thead>
-<tr>
-<th class="tableblock halign-left valign-top">#</th>
-<th class="tableblock halign-left valign-top">Test</th>
-<th class="tableblock halign-left valign-top">What it asserts (and how it can fail)</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">1</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>module-loading</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Both modules present (<code>modprobe</code> fallback if not autoloaded); debugfs
-  reachable; an IIO device named <code>envcombo</code> with chardev and
-  <code>envcombo-dev*</code> trigger appears within 5 s; device idle in SLEEP after
-  probe; probe also provisioned the registers&#8201;&#8212;&#8201;INT_CFG = enabled+latched
-  (0xC0) and CFG = ALS-on at the default gain/time (0x84).</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">2</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>direct-als-read</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Three one-shot reads via <code>in_illuminance_raw</code>, 600 ms apart: each value
-  within the range the default gain/time allows (&#8656; 250), PWR_MODE back in
-  SLEEP after every read, and the readings change over time (a stale or
-  never-running conversion fails).</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">3</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>gain-and-integration-time</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>_available</code> lists exactly the datasheet values; a valid gain write is
-  visible in sysfs readback <strong>and</strong> the CFG register <strong>and</strong> the reported scale;
-  scale is checked to be 1/gain for all four gains; a valid time write lands
-  in CFG; unsupported values (gain 3, time 0.075 s) are rejected with state
-  untouched; defaults restored.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">4</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>gain-response</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">The <strong>functional</strong> counterpart to <code>gain-and-integration-time</code>: sweeps all
-  four gains with live one-shot reads and asserts (a) the raw value grows
-  with gain&#8201;&#8212;&#8201;catching a gain that is ignored or inverted&#8201;&#8212;&#8201;and (b) the
-  gain-compensated value <code>raw \* scale</code> is gain-independent, i.e. the
-  reported scale actually undoes the gain. Degenerate ramp positions (signal
-  at zero or wrapping mid-sweep) are retried so only a real fault fails.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">5</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>time-response</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">The integration-time analogue of <code>gain-response</code>: the simulator divides the
-  reading by <code>time_ms / 50</code>, so sweeping the four integration times must make
-  raw strictly <strong>decrease</strong>, while <code>raw \* (time / 50)</code> stays constant&#8201;&#8212;&#8201;proving
-  the time setting changes the measurement and not just the CFG bits. Same
-  retry-on-degenerate-ramp handling as the gain sweep.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">6</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>factory-gain-cal</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Injects a <code>CAL_AGAIN</code> factory gain multiplier via debugfs and reloads the
-  driver so it re-reads the register at probe; the reported scale must fold in
-  the multiplier (effective gain = configured gain x CAL_AGAIN) at gains 1 and
-  4. The override is always undone and the driver reloaded afterwards.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">7</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>factory-atime-override</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Injects a non-zero <code>CAL_ATIME</code> via debugfs and reloads the driver: the
-  integration time must be forced to the factory value, the <code>_available</code> list
-  collapsed to that single value, and <code>integration_time</code> made read-only (a
-  write is refused and changes nothing). Always restored afterwards. Exercises
-  the factory-override branch that is otherwise only triggered by hand.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">8</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>threshold-attributes</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Threshold writes land in the big-endian TH_LOW/TH_HIGH register pairs;
-  inverted-window, &gt; 16-bit, and negative writes are rejected; registers
-  unchanged after the rejected writes; the boundary case low == high (a
-  degenerate window) is accepted and lands in the registers.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">9</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>threshold-events</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Event fd obtained via <code>IIO_GET_EVENT_FD_IOCTL</code>. With a tight [0, 5]
-  window, an above-window crossing delivers an event whose 64-bit id is
-  exactly light / thresh / EITHER with a positive timestamp; the window is
-  then re-armed the other way (below-window crossing) and a second event
-  with a later timestamp must arrive; with the level back inside the
-  window, <strong>no</strong> event may arrive (spurious-event check); power mode is
-  CONTINUOUS while enabled and SLEEP after disable.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">10</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>triggered-buffer</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Scan element type is <code>le:u16/16&gt;&gt;0</code>; with the driver&#8217;s own trigger and
-  the buffer enabled: PWR_MODE is CONTINUOUS, direct reads still work,
-  &gt;= 8 samples arrive within 8 s, every sample is in range, timestamps are
-  strictly monotonic with a median spacing of ~200 ms (the interrupt
-  cadence), and teardown returns the device to SLEEP.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">11</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>buffer-no-timestamp</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">The other scan layout: with the timestamp scan element <strong>disabled</strong>, records
-  must be bare 2-byte little-endian light samples (the layout the docs'
-  ImHex line_plot relies on). An even byte count and every u16 in range pin
-  the record size&#8201;&#8212;&#8201;a leaked 16-byte timestamped record would read back as
-  wildly out-of-range values.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">12</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>buffer-timestamp-accuracy</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">The <strong>absolute</strong> timestamp, complementing the spacing check in
-  <code>triggered-buffer</code>: the device&#8217;s <code>current_timestamp_clock</code> is mapped to the
-  matching POSIX clock, the buffer read is bracketed with <code>clock_gettime()</code>
-  on that clock, and every fresh sample&#8217;s stamp must be non-zero and land
-  inside that wall-clock window&#8201;&#8212;&#8201;catching a wrong clock source, a
-  stuck/zero stamp, or a constant offset a delta-only check cannot see.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">13</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>power-fsm-transitions</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">The multi-consumer FSM cases: events+buffer both active; a raw read while
-  active stays in CONTINUOUS (no ONE-SHOT detour); disabling events while
-  the buffer runs keeps CONTINUOUS <strong>and</strong> the buffer still delivers a fresh
-  sample (backlog drained first); the mirror case (buffer off, events on);
-  last consumer off &#8594; SLEEP and the one-shot path works again.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">14</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>module-unloading</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>rmmod</code> of driver then simulator succeeds; the IIO device and the
-  simulator&#8217;s debugfs entry disappear; both modules then reload cleanly and
-  the device re-probes into SLEEP.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">15</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>kernel-log-health</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>dmesg</code> contains no WARN/BUG/Oops/refcount/call-trace diagnostics from
-  the entire run, including the unload/reload cycle.</p></td>
-</tr>
-</tbody>
-</table>
+<p>Applications read these files without needing to know the I2C address, register
+layout, or sensor vendor.</p>
 </div>
 </div>
-<div class="sect1">
-<h2 id="_robustness_of_the_harness_itself">3. Robustness of the harness itself</h2>
-<div class="sectionbody">
+<div class="sect2">
+<h3 id="_buffering_and_triggers">1.3. Buffering and triggers</h3>
 <div class="paragraph">
-<p>A test harness that fails for its own reasons is worse than none, so the
-I/O paths are written defensively:</p>
+<p>For high-rate sensors, polling sysfs would lose samples. IIO supports:</p>
 </div>
 <div class="ulist">
 <ul>
 <li>
-<p>All non-blocking reads go through one helper (<code>poll_read_nonblock()</code>):
-<code>poll()</code> is retried on <code>EINTR</code>, a wakeup is only treated as data when
-<code>POLLIN</code> is set, <code>POLLERR</code>/<code>POLLHUP</code>/<code>POLLNVAL</code> are reported as distinct
-failures, and <code>EAGAIN</code> counts as "no data yet" rather than an error.</p>
+<p><strong>Triggers</strong>&#8201;&#8212;&#8201;an IRQ, timer, or data-ready signal initiates each capture.</p>
 </li>
 <li>
-<p>The event reader assembles the 16-byte <code>iio_event_data</code> record across
-short reads and <code>EINTR</code>, with a distinct message for EOF.</p>
+<p><strong>Ring buffers</strong>&#8201;&#8212;&#8201;the driver pushes timestamped scan records into a kfifo;
+userspace drains them from <code>/dev/iio:deviceN</code>.</p>
 </li>
 <li>
-<p>The buffer is read non-blocking with timeouts, so a silent trigger fails
-the test instead of hanging the harness.</p>
-</li>
-<li>
-<p>Buffer teardown runs even when the test body fails, and teardown errors
-are appended to the failure message rather than masking it.</p>
+<p><strong>Events</strong>&#8201;&#8212;&#8201;threshold crossings and other hardware-reported conditions are
+delivered as events through an event file descriptor.</p>
 </li>
 </ul>
+</div>
+<div class="paragraph">
+<p>This driver uses all three: an IRQ-backed trigger fires on each ALS conversion,
+completed scans go into the ring buffer, and threshold crossings are reported as
+<code>IIO_EV_TYPE_THRESH</code> events.</p>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_iio_vs_hwmon">1.4. IIO vs hwmon</h3>
+<table class="tableblock frame-all grid-all stretch">
+<colgroup>
+<col style="width: 25%;">
+<col style="width: 75%;">
+</colgroup>
+<thead>
+<tr>
+<th class="tableblock halign-left valign-top">Framework</th>
+<th class="tableblock halign-left valign-top">Typical use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">IIO</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Environmental and motion sensors: accelerometers, gyroscopes, light, humidity,
+  pressure, ADCs.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">hwmon</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Board-level system monitoring: CPU / motherboard temperatures, fan speeds,
+  supply voltages.</p></td>
+</tr>
+</tbody>
+</table>
+<div class="paragraph">
+<p>For an environmental combo sensor accessed over I2C, IIO is the idiomatic
+choice. <code>hwmon</code> is for monitoring the health of the board itself.</p>
+</div>
 </div>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_interpreting_results">4. Interpreting results</h2>
+<h2 id="_i2c_and_smbus">2. I2C and SMBus</h2>
 <div class="sectionbody">
 <div class="paragraph">
-<p>Each test prints one line:</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre>[10/15] triggered-buffer            PASS
-[10/15] triggered-buffer            FAIL: median sample spacing 612 ms, expected ~200 ms</pre>
-</div>
+<p>I2C (Inter-Integrated Circuit) is a two-wire serial bus (SDA data, SCL clock)
+designed for short-distance communication between a host controller and
+peripheral devices. Each peripheral has a 7-bit address; the ENV-COMBO sits at
+<code>0x39</code>.</p>
 </div>
 <div class="paragraph">
-<p>The failure message always states the observed value and the expectation.
-The process exit code is <code>0</code> on full pass and <code>1</code> otherwise, so the harness
-can gate CI directly. Tests after a failed one still run (each test
-re-establishes what it needs), but a failure in <code>module-loading</code> makes most
-later tests fail for want of a device&#8201;&#8212;&#8201;read the first failure first.</p>
+<p>SMBus is a subset of I2C with stricter timing and a fixed set of transaction
+types (byte read/write, word read/write, block). The Linux kernel exposes these
+as <code>i2c_smbus_read_byte_data()</code>, <code>i2c_smbus_write_byte_data()</code>,
+<code>i2c_smbus_read_word_data()</code>, etc.</p>
 </div>
 <div class="paragraph">
-<p>When a failure looks order-dependent, replay the exact run using the seed
-printed in the run&#8217;s banner:</p>
+<p>This driver uses the SMBus helpers exclusively:</p>
 </div>
-<div class="listingblock">
-<div class="content">
-<pre class="highlight"><code class="language-shell" data-lang="shell">ENVCOMBO_TEST_SEED=4675903481288702464 envcombo-test   # or: envcombo-test --seed=4675903481288702464</code></pre>
+<div class="ulist">
+<ul>
+<li>
+<p>Single-byte register accesses use <code>i2c_smbus_read/write_byte_data()</code>.</p>
+</li>
+<li>
+<p>16-bit register pairs are read and written as a single word transaction via
+<code>i2c_smbus_read_word_swapped()</code> / <code>i2c_smbus_write_word_swapped()</code>, which
+handles the big-endian byte order of the device and prevents a torn read
+between the two bytes of a pair.</p>
+</li>
+</ul>
 </div>
+<div class="paragraph">
+<p>The device is described to the kernel via a Device Tree node that provides the
+bus number, I2C address, and interrupt line. The <code>i2c_driver</code> struct declares a
+<code>.id_table</code> and <code>.of_match_table</code> so the kernel binds the driver to any
+matching node automatically at module load.</p>
 </div>
 </div>
 </div>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-21 09:03:37 +0300
+Last updated 2026-06-21 09:33:00 +0300
 </div>
 </div>
 </body>

@@ -193,6 +193,38 @@ echo 0 > scan_elements/in_illuminance_en
 echo 0 > scan_elements/in_timestamp_en
 ----
 
+=== Power-mode logic
+
+The driver never exposes `PWR_MODE` as a writable sysfs attribute. Instead it
+derives the target mode from two consumer flags and updates the register
+automatically:
+
+[cols="1,1,2", options="header"]
+|===
+| `buffer/enable` | `thresh_either_en` | Resulting PWR_MODE
+
+| 0 | 0 | *SLEEP* (no conversions; raw reads trigger a transient ONE-SHOT)
+| 1 | 0 | *CONTINUOUS* (buffer active)
+| 0 | 1 | *CONTINUOUS* (event monitoring active)
+| 1 | 1 | *CONTINUOUS* (both active)
+|===
+
+ONE-SHOT is a transient state used only for on-demand raw reads while both
+consumers are off: the driver writes `PWR_MODE=ONE-SHOT`, waits for the
+data-ready interrupt (up to 500 ms), reads ALS_OUT, and the device returns to
+SLEEP automatically.
+
+While CONTINUOUS is already active (either consumer on), a raw read skips the
+ONE-SHOT round-trip and returns the most recent latched value directly.
+
+To verify the current power mode from the shell:
+
+[source,shell]
+----
+# PWR_MODE is at offset 0x12: 0x01 = SLEEP, 0x02 = ONE-SHOT, 0x03 = CONTINUOUS
+hexdump -C /sys/kernel/debug/envcombo-sim/regs | grep "00000010"
+----
+
 === Inspect raw device registers (simulator debugfs)
 
 [source,shell]
