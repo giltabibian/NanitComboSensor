@@ -117,6 +117,9 @@ One page, six collapsible sections (`Channel`/`Events`/`Buffer` open by
 default, `State`/`Simulator`/`Capture / Export` collapsed) -- nothing is
 behind a tab switch, just folded out of the way until you need it.
 
+.envcombo-ctl with Channel, Events, and Buffer open -- a live event log and the light-vs-sample plot crossing its rising threshold
+image::images/driver-ctrl-gui.png[envcombo-ctl GUI showing live Channel Events and Buffer data,900]
+
 [cols="1,4", options="header"]
 |===
 | Section | Covers
