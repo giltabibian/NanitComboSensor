@@ -44,7 +44,11 @@ SSH instead. Two small additions make that possible:
 | A tiny libc-only helper installed on the target. A plain shell can't
   issue `IIO_GET_EVENT_FD_IOCTL`, so threshold events need this helper to
   open the chardev's event fd and stream raw `iio_event_data` records to
-  stdout for the GUI to read over an SSH exec channel.
+  stdout for the GUI to read over an SSH exec channel. Retries its own
+  `open()` for up to ~2s on `EBUSY` -- a previous instance, killed when its
+  SSH channel was torn down, is blocked in `poll()` on the *event* fd at
+  that point, not on anything tied to the channel, so the kill is what
+  actually reclaims the chardev, and that reclaim isn't instantaneous.
 |===
 
 == Source layout
@@ -53,12 +57,21 @@ SSH instead. Two small additions make that possible:
 |===
 | File | Role
 
-| `src/main.rs` | `eframe` entry point.
+| `src/main.rs` | `eframe` entry point; requests a maximized window (with a
+  generous fallback size) so all six sections have room to breathe.
 | `src/ssh.rs` | Blocking `ssh2` transport: one-shot `exec_async` (fresh
   connection per call, off the UI thread) and cancellable `start_stream`
-  (one connection held open for the duration of a live stream).
+  (one connection held open for the duration of a live stream, yielding a
+  `StreamEvent::Data`/`Closed` enum so a remote command that exits --
+  cleanly or not -- is reported instead of going silent). Authentication
+  tries `none`, `password`, then `keyboard-interactive` in turn, since
+  dropbear (and PAM-backed servers generally) often route blank-password
+  logins through `keyboard-interactive` even when `password` looks
+  supported.
 | `src/abi.rs` | Sysfs/debugfs attribute paths, the simulator's register-map
-  decode, and the combined snapshot command + parser.
+  decode, the combined snapshot command + parser, the IIO event-code
+  decoder, and the stray-process cleanup commands (`kill_stray_dd_cmd`,
+  `kill_stray_evtcat_cmd`) run before each stream start.
 | `src/app.rs` | The `eframe::App` -- connection state, the 1-second
   auto-refresh poll, and the six collapsible sections.
 |===
@@ -117,18 +130,25 @@ behind a tab switch, just folded out of the way until you need it.
 | Events
 | `events/in_illuminance_thresh_{rising,falling}_value`,
   `thresh_either_en`, and a live-scrolling event log fed by
-  `envcombo-evtcat` over a dedicated SSH channel.
+  `envcombo-evtcat` over a dedicated SSH channel. Each logged line decodes
+  the IIO event code to a human-readable label (this driver only ever
+  emits one: `ALS threshold crossing (EITHER)`) and follows up with a
+  separate `in_illuminance_raw` read to show the light value at the time
+  of the crossing -- the event record itself carries no sample, only an id
+  and a timestamp.
 
 | Buffer
 | `scan_elements/in_illuminance_en` / `in_timestamp_en` and `buffer/length`
   (used by the triggered-buffer capture in Capture/Export below), plus a
-  live light-vs-sample plot. The plot polls `in_illuminance_raw` over plain
-  sysfs every ~250ms rather than streaming `/dev/iio:deviceN` with `dd`:
-  the IIO core only allows one opener of that chardev at a time, and a
-  continuous `dd` would hold it for as long as the plot ran, permanently
-  locking out the Events section's `envcombo-evtcat` (which needs the same
-  chardev briefly, to bootstrap its event fd). Polling sysfs instead means
-  the live plot and the event monitor can run at the same time.
+  live light-vs-sample plot with the current falling/rising thresholds
+  drawn as dashed reference lines, so a crossing is visible on the graph
+  as it happens. The plot polls `in_illuminance_raw` over plain sysfs
+  every ~250ms rather than streaming `/dev/iio:deviceN` with `dd`: the IIO
+  core only allows one opener of that chardev at a time, and a continuous
+  `dd` would hold it for as long as the plot ran, permanently locking out
+  the Events section's `envcombo-evtcat` (which needs the same chardev
+  briefly, to bootstrap its event fd). Polling sysfs instead means the
+  live plot and the event monitor can run at the same time.
 
 | State
 | Read-only PWR_MODE/STATUS/CFG/INT_CFG decode from the simulator's debugfs
@@ -183,7 +203,15 @@ same as before).
 | Confirm dropbear is reachable: `ssh root@localhost -p 2222` from the
   host. If that also fails, check the actual forwarded port in runqemu's
   startup output, or that the image was rebuilt after adding
-  `ssh-server-dropbear`.
+  `ssh-server-dropbear allow-root-login allow-empty-password` to
+  `envcombo-image.bb`'s `IMAGE_FEATURES`.
+
+| Connect fails with an authentication error
+| The tool already tries `none`, `password`, and `keyboard-interactive` in
+  turn (see Source layout above), so a real auth failure here usually
+  means the password field doesn't match what the target actually expects
+  -- confirm the same host/port/user/password combination works from a
+  plain `ssh` first.
 
 | Connected, but every section says no device found
 | Both kernel modules need to be loaded first -- use the Capture/Export
@@ -192,15 +220,12 @@ same as before).
 
 | Events section never logs anything
 | `envcombo-evtcat` must be on the target's `PATH` (installed by the
-  `envcombo-evtcat` package); also confirm `thresh_either_en` is on and the
-  threshold window is actually crossable from the current raw value. If a
-  live event ever did arrive but the log then goes quiet permanently after
-  a Stop/Start cycle with `Device or resource busy` showing up, that's a
-  stale `dd` from the Capture/Export buffer capture (or, before this was
-  fixed, the old `dd`-based live plot) still holding `/dev/iio:deviceN`
-  open -- the Events section's own stray-process cleanup only ever targets
-  `envcombo-evtcat`, never `dd`, so it won't clear that on its own; stop
-  whatever started the `dd` first.
+  `envcombo-evtcat` package); also confirm `thresh_either_en` is on and
+  the threshold window is actually crossable from the current raw value.
+  If it logs `Device or resource busy`, something else is holding
+  `/dev/iio:deviceN` open -- the live plot no longer can (it's sysfs-only
+  now), so this would mean a Capture/Export buffer capture is still
+  running; let it finish, or stop it, then retry.
 
 | Buffer plot is flat or empty
 | Connect status must show a device (the plot polls `in_illuminance_raw`

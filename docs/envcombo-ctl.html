@@ -537,7 +537,11 @@ SSH instead. Two small additions make that possible:</p>
 <td class="tableblock halign-left valign-top"><p class="tableblock">A tiny libc-only helper installed on the target. A plain shell can&#8217;t
   issue <code>IIO_GET_EVENT_FD_IOCTL</code>, so threshold events need this helper to
   open the chardev&#8217;s event fd and stream raw <code>iio_event_data</code> records to
-  stdout for the GUI to read over an SSH exec channel.</p></td>
+  stdout for the GUI to read over an SSH exec channel. Retries its own
+  <code>open()</code> for up to ~2s on <code>EBUSY</code>&#8201;&#8212;&#8201;a previous instance, killed when its
+  SSH channel was torn down, is blocked in <code>poll()</code> on the <strong>event</strong> fd at
+  that point, not on anything tied to the channel, so the kill is what
+  actually reclaims the chardev, and that reclaim isn&#8217;t instantaneous.</p></td>
 </tr>
 </tbody>
 </table>
@@ -560,18 +564,26 @@ SSH instead. Two small additions make that possible:</p>
 <tbody>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>src/main.rs</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>eframe</code> entry point.</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>eframe</code> entry point; requests a maximized window (with a
+  generous fallback size) so all six sections have room to breathe.</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>src/ssh.rs</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Blocking <code>ssh2</code> transport: one-shot <code>exec_async</code> (fresh
   connection per call, off the UI thread) and cancellable <code>start_stream</code>
-  (one connection held open for the duration of a live stream).</p></td>
+  (one connection held open for the duration of a live stream, yielding a
+  <code>StreamEvent::Data</code>/<code>Closed</code> enum so a remote command that exits&#8201;&#8212;&#8201;  cleanly or not&#8201;&#8212;&#8201;is reported instead of going silent). Authentication
+  tries <code>none</code>, <code>password</code>, then <code>keyboard-interactive</code> in turn, since
+  dropbear (and PAM-backed servers generally) often route blank-password
+  logins through <code>keyboard-interactive</code> even when <code>password</code> looks
+  supported.</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>src/abi.rs</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Sysfs/debugfs attribute paths, the simulator&#8217;s register-map
-  decode, and the combined snapshot command + parser.</p></td>
+  decode, the combined snapshot command + parser, the IIO event-code
+  decoder, and the stray-process cleanup commands (<code>kill_stray_dd_cmd</code>,
+  <code>kill_stray_evtcat_cmd</code>) run before each stream start.</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>src/app.rs</code></p></td>
@@ -656,19 +668,26 @@ behind a tab switch, just folded out of the way until you need it.</p>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Events</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>events/in_illuminance_thresh_{rising,falling}_value</code>,
   <code>thresh_either_en</code>, and a live-scrolling event log fed by
-  <code>envcombo-evtcat</code> over a dedicated SSH channel.</p></td>
+  <code>envcombo-evtcat</code> over a dedicated SSH channel. Each logged line decodes
+  the IIO event code to a human-readable label (this driver only ever
+  emits one: <code>ALS threshold crossing (EITHER)</code>) and follows up with a
+  separate <code>in_illuminance_raw</code> read to show the light value at the time
+  of the crossing&#8201;&#8212;&#8201;the event record itself carries no sample, only an id
+  and a timestamp.</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Buffer</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>scan_elements/in_illuminance_en</code> / <code>in_timestamp_en</code> and <code>buffer/length</code>
   (used by the triggered-buffer capture in Capture/Export below), plus a
-  live light-vs-sample plot. The plot polls <code>in_illuminance_raw</code> over plain
-  sysfs every ~250ms rather than streaming <code>/dev/iio:deviceN</code> with <code>dd</code>:
-  the IIO core only allows one opener of that chardev at a time, and a
-  continuous <code>dd</code> would hold it for as long as the plot ran, permanently
-  locking out the Events section&#8217;s <code>envcombo-evtcat</code> (which needs the same
-  chardev briefly, to bootstrap its event fd). Polling sysfs instead means
-  the live plot and the event monitor can run at the same time.</p></td>
+  live light-vs-sample plot with the current falling/rising thresholds
+  drawn as dashed reference lines, so a crossing is visible on the graph
+  as it happens. The plot polls <code>in_illuminance_raw</code> over plain sysfs
+  every ~250ms rather than streaming <code>/dev/iio:deviceN</code> with <code>dd</code>: the IIO
+  core only allows one opener of that chardev at a time, and a continuous
+  <code>dd</code> would hold it for as long as the plot ran, permanently locking out
+  the Events section&#8217;s <code>envcombo-evtcat</code> (which needs the same chardev
+  briefly, to bootstrap its event fd). Polling sysfs instead means the
+  live plot and the event monitor can run at the same time.</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock">State</p></td>
@@ -750,7 +769,16 @@ responsive while it waits.</p>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Confirm dropbear is reachable: <code>ssh root@localhost -p 2222</code> from the
   host. If that also fails, check the actual forwarded port in runqemu&#8217;s
   startup output, or that the image was rebuilt after adding
-  <code>ssh-server-dropbear</code>.</p></td>
+  <code>ssh-server-dropbear allow-root-login allow-empty-password</code> to
+  <code>envcombo-image.bb&#8217;s `IMAGE_FEATURES</code>.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Connect fails with an authentication error</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">The tool already tries <code>none</code>, <code>password</code>, and <code>keyboard-interactive</code> in
+  turn (see Source layout above), so a real auth failure here usually
+  means the password field doesn&#8217;t match what the target actually expects
+ &#8201;&#8212;&#8201;confirm the same host/port/user/password combination works from a
+  plain <code>ssh</code> first.</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Connected, but every section says no device found</p></td>
@@ -761,15 +789,12 @@ responsive while it waits.</p>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Events section never logs anything</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>envcombo-evtcat</code> must be on the target&#8217;s <code>PATH</code> (installed by the
-  <code>envcombo-evtcat</code> package); also confirm <code>thresh_either_en</code> is on and the
-  threshold window is actually crossable from the current raw value. If a
-  live event ever did arrive but the log then goes quiet permanently after
-  a Stop/Start cycle with <code>Device or resource busy</code> showing up, that&#8217;s a
-  stale <code>dd</code> from the Capture/Export buffer capture (or, before this was
-  fixed, the old <code>dd</code>-based live plot) still holding <code>/dev/iio:deviceN</code>
-  open&#8201;&#8212;&#8201;the Events section&#8217;s own stray-process cleanup only ever targets
-  <code>envcombo-evtcat</code>, never <code>dd</code>, so it won&#8217;t clear that on its own; stop
-  whatever started the <code>dd</code> first.</p></td>
+  <code>envcombo-evtcat</code> package); also confirm <code>thresh_either_en</code> is on and
+  the threshold window is actually crossable from the current raw value.
+  If it logs <code>Device or resource busy</code>, something else is holding
+  <code>/dev/iio:deviceN</code> open&#8201;&#8212;&#8201;the live plot no longer can (it&#8217;s sysfs-only
+  now), so this would mean a Capture/Export buffer capture is still
+  running; let it finish, or stop it, then retry.</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Buffer plot is flat or empty</p></td>
@@ -785,7 +810,7 @@ responsive while it waits.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-21 22:28:06 +0300
+Last updated 2026-06-21 22:38:40 +0300
 </div>
 </div>
 </body>

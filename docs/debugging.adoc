@@ -21,7 +21,7 @@ below follows the same pattern: a one-shot `nc` listener in WSL2 (where the
 guest's slirp gateway `10.0.2.2` resolves) writes the blob to a
 Windows-visible path, then the guest sends it.
 
-TIP: link:envcombo-ctl.html[envcombo-ctl]'s Capture/Export tab automates
+TIP: link:envcombo-ctl.html[envcombo-ctl]'s Capture/Export section automates
 this entire dance over SSH -- one click writes `regs.bin` or a buffer
 capture straight to a local path, no listener required. The manual `nc`
 workflow below is still useful to understand what's happening on the wire,
