@@ -79,6 +79,18 @@ selected by `INT_POL` (0 = active-low, the power-on default). `INT_LATCH=1`
 keeps `ALS_INT` set until STATUS is read even if the value returns in-range;
 with `INT_LATCH=0` the flag self-clears, which can lose events (see
 <<design-decisions>>).
++
+Note the intentional opposition: STATUS bits go `0 -> 1` when an event fires
+(register flag convention: `1` = yes), while the physical INT pin goes
+`HIGH -> LOW` (active-low electrical convention). They are two different
+representations of the same event -- a bit value and a voltage level -- and
+they move in opposite directions by design.
++
+----
+Event fires
+  STATUS bit: 0 → 1   (flag set: "event occurred")
+  INT pin:    HIGH → LOW  (active-low pulse to the CPU)
+----
 
 == Driver Architecture
 

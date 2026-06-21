@@ -561,6 +561,7 @@ echo 800 &gt; events/in_illuminance_thresh_rising_value
 # Power mode is FSM-driven, not directly writable. Enabling a consumer
 # drives PWR_MODE (0x12) to CONTINUOUS (0x03); disabling all consumers
 # returns it to SLEEP (0x01).
+# See user-guide § "Power-mode logic" for the full consumer table.
 echo 1 &gt; events/in_illuminance_thresh_either_en</code></pre>
 </div>
 </div>
@@ -963,7 +964,7 @@ conversion, after which the device auto-returns to SLEEP.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-21 09:03:37 +0300
+Last updated 2026-06-21 09:51:15 +0300
 </div>
 </div>
 </body>
