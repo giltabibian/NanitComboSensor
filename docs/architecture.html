@@ -540,6 +540,29 @@ hardware exposing the same register map.</p>
 <img src="diagrams/svg/system-overview.svg" alt="System overview block diagram">
 </div>
 </div>
+<div class="paragraph">
+<p>The diagram shows two distinct communication paths between the device and the
+SoC:</p>
+</div>
+<div class="ulist">
+<ul>
+<li>
+<p><strong>I2C bus</strong> (SDA + SCL)&#8201;&#8212;&#8201;the driver&#8217;s only active path; all register reads
+and writes go here.</p>
+</li>
+<li>
+<p><strong>INT pin</strong>&#8201;&#8212;&#8201;a dedicated physical wire, separate from I2C, that the device
+asserts to interrupt the CPU. The driver never reads or writes this pin;
+the SoC&#8217;s interrupt controller detects its edge and wakes the IRQ thread.</p>
+</li>
+</ul>
+</div>
+<div class="paragraph">
+<p><code>INT_CFG</code> (register <code>0x07</code>) configures how the INT pin behaves (<code>INT_EN</code>,
+<code>INT_POL</code>, <code>INT_LATCH</code>), but the pin itself is not part of the I2C bus.
+When the device has data or a threshold crossing to report, it drives INT
+low&#8201;&#8212;&#8201;the IRQ thread then reads <code>STATUS</code> over I2C to learn what happened.</p>
+</div>
 </div>
 </div>
 <div class="sect1">
@@ -652,6 +675,20 @@ selected by <code>INT_POL</code> (0 = active-low, the power-on default). <code>I
 keeps <code>ALS_INT</code> set until STATUS is read even if the value returns in-range;
 with <code>INT_LATCH=0</code> the flag self-clears, which can lose events (see
 <a href="#design-decisions">Design Decisions &amp; Tradeoffs</a>).</p>
+<div class="paragraph">
+<p>Note the intentional opposition: STATUS bits go <code>0 &#8594; 1</code> when an event fires
+(register flag convention: <code>1</code> = yes), while the physical INT pin goes
+<code>HIGH &#8594; LOW</code> (active-low electrical convention). They are two different
+representations of the same event&#8201;&#8212;&#8201;a bit value and a voltage level&#8201;&#8212;&#8201;and
+they move in opposite directions by design.</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre>Event fires
+  STATUS bit: 0 → 1   (flag set: "event occurred")
+  INT pin:    HIGH → LOW  (active-low pulse to the CPU)</pre>
+</div>
+</div>
 </dd>
 </dl>
 </div>
@@ -877,8 +914,9 @@ conversion produces one scan record.</p>
 <dl>
 <dt class="hdlist1">Plain <code>i2c_smbus</code> instead of regmap</dt>
 <dd>
-<p>The device has 19 byte-wide registers and the driver touches 11 of them; a
-regmap adds little. Decisive practical point: <code>CONFIG_REGMAP_I2C</code> is a
+<p>The device has 19 byte-wide registers and the driver touches 13 of them (the
+other 6 are temperature/humidity registers, out of scope here); a regmap
+adds little. Decisive practical point: <code>CONFIG_REGMAP_I2C</code> is a
 hidden Kconfig symbol that in-tree drivers pull in via <code>select</code>, which an
 out-of-tree module cannot do cleanly. Register caching would be wrong
 anyway (STATUS is clear-on-read, ALS_OUT is hardware-latched).</p>
@@ -988,7 +1026,7 @@ state to leave behind on unbind.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-21 09:23:42 +0300
+Last updated 2026-06-21 17:43:16 +0300
 </div>
 </div>
 </body>
