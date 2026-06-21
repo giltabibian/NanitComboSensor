@@ -258,8 +258,23 @@ impl EnvComboCtl {
             s.stop();
         }
         self.event_rx = None;
+        self.event_partial.clear();
+        self.pending_event_reads.clear();
+
         self.plot_active = false;
         self.plot_poll_rx = None;
+        self.plot_poll_inflight = false;
+
+        self.snapshot_rx = None;
+        self.snapshot_inflight = false;
+
+        self.export_rx = None;
+        self.export_inflight = false;
+        self.export_kind = None;
+
+        self.pending.clear();
+        self.connect_rx = None;
+
         self.device = None;
         self.status = ConnStatus::Disconnected;
         self.status_msg.clear();
