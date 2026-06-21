@@ -1,0 +1,11 @@
+[package]
+name = "envcombo-ctl"
+version = "0.1.0"
+edition = "2021"
+description = "Host-side egui GUI for driving the ENV-COMBO IIO driver ABI over SSH"
+license = "MIT"
+
+[dependencies]
+eframe = "0.29"
+egui_plot = "0.29"
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
