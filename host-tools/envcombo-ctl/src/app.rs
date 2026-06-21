@@ -34,6 +34,19 @@ enum ExportKind {
     Buffer,
 }
 
+enum EventLogEntry {
+    Marker(String),
+    Event {
+        seq: u64,
+        label: String,
+        ts_ns: i64,
+        /// in_illuminance_raw, read on demand right after the event arrives
+        /// (cheap while CONTINUOUS -- it's just the latched value, no fresh
+        /// conversion) since the event record itself carries no sample.
+        raw: Option<u16>,
+    },
+}
+
 struct PendingAction {
     label: String,
     rx: Receiver<Result<Vec<u8>, String>>,
@@ -61,10 +74,12 @@ pub struct EnvComboCtl {
 
     thresh_rising_buf: String,
     thresh_falling_buf: String,
-    event_log: VecDeque<String>,
+    event_log: VecDeque<EventLogEntry>,
     event_stream: Option<ssh::Stream>,
     event_rx: Option<Receiver<Vec<u8>>>,
     event_partial: Vec<u8>,
+    next_event_seq: u64,
+    pending_event_reads: Vec<(u64, Receiver<Result<Vec<u8>, String>>)>,
 
     buffer_len_buf: String,
     plot_points: VecDeque<[f64; 2]>,
@@ -111,6 +126,8 @@ impl Default for EnvComboCtl {
             event_stream: None,
             event_rx: None,
             event_partial: Vec::new(),
+            next_event_seq: 0,
+            pending_event_reads: Vec::new(),
 
             buffer_len_buf: "64".to_string(),
             plot_points: VecDeque::new(),
@@ -136,6 +153,7 @@ impl eframe::App for EnvComboCtl {
         self.drain_pending();
         self.poll_snapshot();
         self.poll_event_stream();
+        self.poll_pending_event_reads();
         self.poll_buffer_stream();
         self.poll_export();
 
@@ -494,8 +512,21 @@ impl EnvComboCtl {
             .max_height(220.0)
             .stick_to_bottom(true)
             .show(ui, |ui| {
-                for line in &self.event_log {
-                    ui.monospace(line);
+                for entry in &self.event_log {
+                    match entry {
+                        EventLogEntry::Marker(text) => {
+                            ui.monospace(text);
+                        }
+                        EventLogEntry::Event { label, ts_ns, raw, .. } => {
+                            let light = raw
+                                .map(|v| v.to_string())
+                                .unwrap_or_else(|| "reading...".to_string());
+                            ui.monospace(format!(
+                                "{label} light={light} ts={ts_ns} ns (~{:.3}s epoch)",
+                                *ts_ns as f64 / 1e9
+                            ));
+                        }
+                    }
                 }
             });
     }
@@ -510,7 +541,7 @@ impl EnvComboCtl {
                 self.event_stream = Some(stream);
                 self.event_rx = Some(rx);
                 self.event_partial.clear();
-                self.push_event_log("-- monitor started --".to_string());
+                self.push_event_entry(EventLogEntry::Marker("-- monitor started --".to_string()));
             }
             Err(e) => self.status_msg = format!("event monitor: {e}"),
         }
@@ -521,33 +552,77 @@ impl EnvComboCtl {
             s.stop();
         }
         self.event_rx = None;
-        self.push_event_log("-- monitor stopped --".to_string());
+        self.push_event_entry(EventLogEntry::Marker("-- monitor stopped --".to_string()));
     }
 
     fn poll_event_stream(&mut self) {
+        let Some(device) = self.device.clone() else {
+            return;
+        };
         let Some(rx) = &self.event_rx else {
             return;
         };
-        let mut lines = Vec::new();
+        let mut entries = Vec::new();
         while let Ok(chunk) = rx.try_recv() {
             self.event_partial.extend_from_slice(&chunk);
             while self.event_partial.len() >= 16 {
                 let record: Vec<u8> = self.event_partial.drain(..16).collect();
                 let id = u64::from_le_bytes(record[0..8].try_into().unwrap());
                 let ts_ns = i64::from_le_bytes(record[8..16].try_into().unwrap());
-                lines.push(format!(
-                    "id=0x{id:016x} ts={ts_ns} ns (~{:.3}s epoch)",
-                    ts_ns as f64 / 1e9
-                ));
+                let seq = self.next_event_seq;
+                self.next_event_seq += 1;
+                entries.push(EventLogEntry::Event {
+                    seq,
+                    label: abi::describe_event_id(id),
+                    ts_ns,
+                    raw: None,
+                });
+
+                // The event record carries no sample value, so fetch the
+                // currently-latched in_illuminance_raw right away -- while
+                // CONTINUOUS (true here, since an event just fired) that's
+                // a cheap read of the same value the crossing check used,
+                // not a fresh conversion.
+                let (tx, read_rx) = mpsc::channel();
+                ssh::exec_async(
+                    self.cfg.clone(),
+                    format!("cat {}/in_illuminance_raw", device.base),
+                    tx,
+                );
+                self.pending_event_reads.push((seq, read_rx));
             }
         }
-        for line in lines {
-            self.push_event_log(line);
+        for entry in entries {
+            self.push_event_entry(entry);
         }
     }
 
-    fn push_event_log(&mut self, line: String) {
-        self.event_log.push_back(line);
+    fn poll_pending_event_reads(&mut self) {
+        let mut still = Vec::new();
+        for (seq, rx) in self.pending_event_reads.drain(..) {
+            match rx.try_recv() {
+                Ok(result) => {
+                    let value = result.ok().and_then(|bytes| {
+                        String::from_utf8_lossy(&bytes).trim().parse::<u16>().ok()
+                    });
+                    for entry in self.event_log.iter_mut() {
+                        if let EventLogEntry::Event { seq: s, raw, .. } = entry {
+                            if *s == seq {
+                                *raw = value;
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(TryRecvError::Empty) => still.push((seq, rx)),
+                Err(TryRecvError::Disconnected) => {}
+            }
+        }
+        self.pending_event_reads = still;
+    }
+
+    fn push_event_entry(&mut self, entry: EventLogEntry) {
+        self.event_log.push_back(entry);
         while self.event_log.len() > EVENT_LOG_CAP {
             self.event_log.pop_front();
         }

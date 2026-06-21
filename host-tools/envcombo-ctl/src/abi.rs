@@ -113,6 +113,20 @@ pub fn decode(regs: &[u8; REG_COUNT]) -> Decoded {
     }
 }
 
+/// `IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0, IIO_EV_TYPE_THRESH, IIO_EV_DIR_EITHER)`
+/// -- the only event code this driver ever pushes (see
+/// `envcombo_irq_thread` in envcombo.c): chan_type=IIO_LIGHT(6) in bits
+/// [39:32], every other field (type, direction, channel, modifier) zero.
+pub const EXPECTED_EVENT_ID: u64 = 6u64 << 32;
+
+pub fn describe_event_id(id: u64) -> String {
+    if id == EXPECTED_EVENT_ID {
+        "ALS threshold crossing (EITHER)".to_string()
+    } else {
+        format!("unrecognized event id 0x{id:016x}")
+    }
+}
+
 /// Device discovered at `/sys/bus/iio/devices/iio:deviceN`.
 #[derive(Clone, Debug)]
 pub struct Device {
