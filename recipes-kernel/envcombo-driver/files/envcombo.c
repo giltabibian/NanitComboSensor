@@ -485,7 +485,7 @@ static int envcombo_set_trigger_state(struct iio_trigger *trig, bool enable)
 	int ret;
 
 	mutex_lock(&data->lock);
-	data->buffer_en = enable;
+	WRITE_ONCE(data->buffer_en, enable);
 	ret = envcombo_update_power_mode(data);
 	mutex_unlock(&data->lock);
 
