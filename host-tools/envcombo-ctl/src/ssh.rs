@@ -190,7 +190,25 @@ pub fn start_stream(cfg: &Config, cmd: &str, sink: Sender<StreamEvent>) -> Resul
                         break; // UI side gave up listening
                     }
                 }
-                Err(_) => break, // includes the socket shutdown from Stream::stop()
+                Err(e) => {
+                    // Includes the socket shutdown from `Stream::stop()`. If the UI is still
+                    // listening, report the failure so it doesn't look like a stream that
+                    // runs forever while silently delivering nothing.
+                    let _ = channel.close();
+                    let status = channel.exit_status().unwrap_or(-1);
+                    let mut stderr = String::new();
+                    let _ = channel.stderr().read_to_string(&mut stderr);
+                    let details = if stderr.trim().is_empty() {
+                        format!("read error: {e}")
+                    } else {
+                        format!("{} (read error: {e})", stderr.trim())
+                    };
+                    let _ = sink.send(StreamEvent::Closed {
+                        status,
+                        stderr: details,
+                    });
+                    return;
+                }
             }
         }
         let _ = channel.close();
