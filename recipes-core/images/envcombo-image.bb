@@ -19,4 +19,5 @@ IMAGE_INSTALL += " \
     kernel-module-i2c-envcombo-sim \
     envcombo-test \
     envcombo-evtcat \
+    envcombo-timezone \
 "
