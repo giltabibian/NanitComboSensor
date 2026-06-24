@@ -477,21 +477,22 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </ul>
 </li>
 <li><a href="#_boot_in_qemu">4. Boot in QEMU</a></li>
-<li><a href="#_verify_the_modules_and_the_driver_bind">5. Verify the modules and the driver bind</a></li>
-<li><a href="#_exercise_the_driver_manually">6. Exercise the driver manually</a>
+<li><a href="#_ssh_access">5. SSH access</a></li>
+<li><a href="#_verify_the_modules_and_the_driver_bind">6. Verify the modules and the driver bind</a></li>
+<li><a href="#_exercise_the_driver_manually">7. Exercise the driver manually</a>
 <ul class="sectlevel2">
-<li><a href="#_on_demand_als_reads_one_shot">6.1. On-demand ALS reads (one-shot)</a></li>
-<li><a href="#_gain_and_integration_time">6.2. Gain and integration time</a></li>
-<li><a href="#_threshold_window">6.3. Threshold window</a></li>
-<li><a href="#_threshold_events">6.4. Threshold events</a></li>
-<li><a href="#_triggered_buffer_capture">6.5. Triggered buffer capture</a></li>
-<li><a href="#_power_mode_logic">6.6. Power-mode logic</a></li>
-<li><a href="#_inspect_raw_device_registers_simulator_debugfs">6.7. Inspect raw device registers (simulator debugfs)</a></li>
+<li><a href="#_on_demand_als_reads_one_shot">7.1. On-demand ALS reads (one-shot)</a></li>
+<li><a href="#_gain_and_integration_time">7.2. Gain and integration time</a></li>
+<li><a href="#_threshold_window">7.3. Threshold window</a></li>
+<li><a href="#_threshold_events">7.4. Threshold events</a></li>
+<li><a href="#_triggered_buffer_capture">7.5. Triggered buffer capture</a></li>
+<li><a href="#_power_mode_logic">7.6. Power-mode logic</a></li>
+<li><a href="#_inspect_raw_device_registers_simulator_debugfs">7.7. Inspect raw device registers (simulator debugfs)</a></li>
 </ul>
 </li>
-<li><a href="#_run_the_test_harness">7. Run the test harness</a></li>
-<li><a href="#_check_the_driver_coding_style">8. Check the driver coding style</a></li>
-<li><a href="#_troubleshooting">9. Troubleshooting</a></li>
+<li><a href="#_run_the_test_harness">8. Run the test harness</a></li>
+<li><a href="#_check_the_driver_coding_style">9. Check the driver coding style</a></li>
+<li><a href="#_troubleshooting">10. Troubleshooting</a></li>
 </ul>
 </div>
 </div>
@@ -603,7 +604,31 @@ runqemu tmp/deploy/images/qemuarm64/envcombo-image-qemuarm64.rootfs.qemuboot.con
 </div>
 </div>
 <div class="sect1">
-<h2 id="_verify_the_modules_and_the_driver_bind">5. Verify the modules and the driver bind</h2>
+<h2 id="_ssh_access">5. SSH access</h2>
+<div class="sectionbody">
+<div class="paragraph">
+<p>The image includes a dropbear SSH server (<code>IMAGE_FEATURES +=
+"ssh-server-dropbear allow-root-login allow-empty-password"</code>, so the blank
+root password also works over SSH). With <code>slirp</code> networking this is
+reachable from the host, conventionally at <code>localhost:2222</code>:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-shell" data-lang="shell">ssh root@localhost -p 2222</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>If that port doesn&#8217;t connect, check the network configuration <code>runqemu</code>
+printed at startup&#8201;&#8212;&#8201;the exact forwarded port depends on the local
+<code>runqemu</code> setup. SSH access is what lets
+<a href="envcombo-ctl.html">envcombo-ctl</a>, a host-side GUI for the whole driver
+ABI, reach the target; see that page for setup and a tour of what it can
+do.</p>
+</div>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_verify_the_modules_and_the_driver_bind">6. Verify the modules and the driver bind</h2>
 <div class="sectionbody">
 <div class="paragraph">
 <p>Both modules autoload at boot (<code>/etc/modules-load.d/</code>). To check:</p>
@@ -638,7 +663,7 @@ dmesg | tail</code></pre>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_exercise_the_driver_manually">6. Exercise the driver manually</h2>
+<h2 id="_exercise_the_driver_manually">7. Exercise the driver manually</h2>
 <div class="sectionbody">
 <div class="paragraph">
 <p><strong>All paths below are relative to the IIO device directory&#8201;&#8212;&#8201;run this
@@ -650,7 +675,7 @@ first:</strong></p>
 </div>
 </div>
 <div class="sect2">
-<h3 id="_on_demand_als_reads_one_shot">6.1. On-demand ALS reads (one-shot)</h3>
+<h3 id="_on_demand_als_reads_one_shot">7.1. On-demand ALS reads (one-shot)</h3>
 <div class="listingblock">
 <div class="content">
 <pre class="highlight"><code class="language-shell" data-lang="shell">cat in_illuminance_raw        # runs a one-shot conversion (device sleeps after)
@@ -659,7 +684,7 @@ cat in_illuminance_scale      # 1/(gain x calib_gain); raw * scale = illuminance
 </div>
 </div>
 <div class="sect2">
-<h3 id="_gain_and_integration_time">6.2. Gain and integration time</h3>
+<h3 id="_gain_and_integration_time">7.2. Gain and integration time</h3>
 <div class="listingblock">
 <div class="content">
 <pre class="highlight"><code class="language-shell" data-lang="shell">cat in_illuminance_hardwaregain_available         # 1 4 16 64
@@ -675,7 +700,7 @@ cat in_illuminance_integration_time               # 0.400000</code></pre>
 </div>
 </div>
 <div class="sect2">
-<h3 id="_threshold_window">6.3. Threshold window</h3>
+<h3 id="_threshold_window">7.3. Threshold window</h3>
 <div class="listingblock">
 <div class="content">
 <pre class="highlight"><code class="language-shell" data-lang="shell"># window [100, 800]; write falling first so the window stays well-formed:
@@ -688,7 +713,7 @@ echo 10  &gt; events/in_illuminance_thresh_rising_value   # rejected (&lt; falli
 </div>
 </div>
 <div class="sect2">
-<h3 id="_threshold_events">6.4. Threshold events</h3>
+<h3 id="_threshold_events">7.4. Threshold events</h3>
 <div class="paragraph">
 <p>Enabling the event powers the device into CONTINUOUS; a crossing out of the
 window delivers an <code>IIO_EV_DIR_EITHER</code> event on the chardev&#8217;s event fd.
@@ -709,7 +734,7 @@ echo 0 &gt; events/in_illuminance_thresh_either_en   # back to SLEEP (01)</code>
 </div>
 </div>
 <div class="sect2">
-<h3 id="_triggered_buffer_capture">6.5. Triggered buffer capture</h3>
+<h3 id="_triggered_buffer_capture">7.5. Triggered buffer capture</h3>
 <div class="listingblock">
 <div class="content">
 <pre class="highlight"><code class="language-shell" data-lang="shell">echo 1 &gt; scan_elements/in_illuminance_en
@@ -729,7 +754,7 @@ echo 0 &gt; scan_elements/in_timestamp_en</code></pre>
 </div>
 </div>
 <div class="sect2">
-<h3 id="_power_mode_logic">6.6. Power-mode logic</h3>
+<h3 id="_power_mode_logic">7.6. Power-mode logic</h3>
 <div class="paragraph">
 <p>The driver never exposes <code>PWR_MODE</code> as a writable sysfs attribute. Instead it
 derives the target mode from two consumer flags and updates the register
@@ -792,7 +817,7 @@ hexdump -C /sys/kernel/debug/envcombo-sim/regs | grep "00000010"</code></pre>
 </div>
 </div>
 <div class="sect2">
-<h3 id="_inspect_raw_device_registers_simulator_debugfs">6.7. Inspect raw device registers (simulator debugfs)</h3>
+<h3 id="_inspect_raw_device_registers_simulator_debugfs">7.7. Inspect raw device registers (simulator debugfs)</h3>
 <div class="listingblock">
 <div class="content">
 <pre class="highlight"><code class="language-shell" data-lang="shell">mount -t debugfs debugfs /sys/kernel/debug 2&gt;/dev/null
@@ -832,7 +857,7 @@ Binary Inspection</a>.
 </div>
 </div>
 <div class="sect1">
-<h2 id="_run_the_test_harness">7. Run the test harness</h2>
+<h2 id="_run_the_test_harness">8. Run the test harness</h2>
 <div class="sectionbody">
 <div class="paragraph">
 <p>The harness is self-contained: module-loading reloads both modules for a
@@ -880,7 +905,7 @@ module-loading and module-unloading.</p>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_check_the_driver_coding_style">8. Check the driver coding style</h2>
+<h2 id="_check_the_driver_coding_style">9. Check the driver coding style</h2>
 <div class="sectionbody">
 <div class="paragraph">
 <p>The driver follows the Linux kernel coding style. Verify it with the
@@ -925,7 +950,7 @@ drift on the second and later continuation lines&#8201;&#8212;&#8201;review thos
 </div>
 </div>
 <div class="sect1">
-<h2 id="_troubleshooting">9. Troubleshooting</h2>
+<h2 id="_troubleshooting">10. Troubleshooting</h2>
 <div class="sectionbody">
 <table class="tableblock frame-all grid-all stretch">
 <colgroup>
@@ -971,7 +996,7 @@ drift on the second and later continuation lines&#8201;&#8212;&#8201;review thos
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-21 09:51:06 +0300
+Last updated 2026-06-21 19:19:36 +0300
 </div>
 </div>
 </body>

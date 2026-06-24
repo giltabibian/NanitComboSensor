@@ -5,7 +5,7 @@
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="generator" content="Asciidoctor 2.0.16">
-<title>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Architecture &amp; Design</title>
+<title>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Host GUI (envcombo-ctl)</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Open+Sans:300,300italic,400,400italic,600,600italic%7CNoto+Serif:400,400italic,700,700italic%7CDroid+Sans+Mono:400,700">
 <style>
 /*! Asciidoctor default stylesheet | MIT License | https://asciidoctor.org */
@@ -465,34 +465,17 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </head>
 <body class="article">
 <div id="header">
-<h1>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Architecture &amp; Design</h1>
+<h1>ENV-COMBO IIO Driver&#8201;&#8212;&#8201;Host GUI (envcombo-ctl)</h1>
 <div id="toc" class="toc">
 <div id="toctitle">Table of Contents</div>
 <ul class="sectlevel1">
-<li><a href="#_system_overview">1. System Overview</a></li>
-<li><a href="#_hardware_model_als_relevant_subset">2. Hardware Model (ALS-relevant subset)</a>
-<ul class="sectlevel2">
-<li><a href="#_register_map">2.1. Register map</a></li>
-<li><a href="#_device_behavior_per_datasheet">2.2. Device behavior (per datasheet)</a></li>
-</ul>
-</li>
-<li><a href="#_driver_architecture">3. Driver Architecture</a>
-<ul class="sectlevel2">
-<li><a href="#_components_and_state">3.1. Components and state</a></li>
-<li><a href="#_power_mode_state_machine">3.2. Power-mode state machine</a></li>
-</ul>
-</li>
-<li><a href="#_als_usage_flows">4. ALS Usage Flows</a>
-<ul class="sectlevel2">
-<li><a href="#_probe_initialization">4.1. Probe / initialization</a></li>
-<li><a href="#_on_demand_raw_read_one_shot_path">4.2. On-demand raw read (one-shot path)</a></li>
-<li><a href="#_threshold_event_flow">4.3. Threshold event flow</a></li>
-<li><a href="#_triggered_buffer_flow">4.4. Triggered buffer flow</a></li>
-</ul>
-</li>
-<li><a href="#_userspace_abi">5. Userspace ABI</a></li>
-<li><a href="#design-decisions">6. Design Decisions &amp; Tradeoffs</a></li>
-<li><a href="#_source_layout">7. Source Layout</a></li>
+<li><a href="#_why_ssh_not_a_window_inside_qemu">1. Why SSH, not a window inside QEMU</a></li>
+<li><a href="#_source_layout">2. Source layout</a></li>
+<li><a href="#_connecting">3. Connecting</a></li>
+<li><a href="#_building_running">4. Building &amp; running</a></li>
+<li><a href="#_sections">5. Sections</a></li>
+<li><a href="#_captureexport_replacing_the_nc_dance">6. Capture/Export: replacing the <code>nc</code> dance</a></li>
+<li><a href="#_troubleshooting">7. Troubleshooting</a></li>
 </ul>
 </div>
 </div>
@@ -503,521 +486,328 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <p><a href="index.html">&#8592; Back to documentation index</a></p>
 </div>
 <div class="paragraph">
-<p>This document describes the architecture of the <code>envcombo</code> Linux IIO driver
-(<code>recipes-kernel/envcombo-driver/files/envcombo.c</code>) for the fictional
-ENV-COMBO I2C combo sensor. Only the ambient-light (ALS, <code>IIO_LIGHT</code>) path is
-implemented; temperature and humidity are out of scope for this assignment.</p>
-</div>
-<div class="admonitionblock note">
-<table>
-<tr>
-<td class="icon">
-<div class="title">Note</div>
-</td>
-<td class="content">
-Diagrams are maintained as PlantUML sources in <code>docs/diagrams/*.puml</code>
-and embedded as SVGs rendered into <code>docs/diagrams/svg/</code>. Regenerate after
-editing with <code>plantuml -tsvg -o svg docs/diagrams/*.puml</code>.
-</td>
-</tr>
-</table>
+<p><code>host-tools/envcombo-ctl/</code> is a host-side Rust/egui application that drives
+every sysfs/debugfs/chardev knob in <a href="architecture.html">the userspace
+ABI</a> through point-and-click widgets, over SSH. It is <strong>not</strong> part of the
+graded Yocto layer build&#8201;&#8212;&#8201;<code>conf/layer.conf&#8217;s `BBFILES</code> only globs
+<code>recipes-<strong>/</strong>/*.bb</code>, so this directory is invisible to bitbake; it&#8217;s bonus
+tooling that runs on the development host while QEMU is up, replacing the
+manual <code>cat</code>/<code>echo</code>/<code>hexdump</code> shell dance (and the
+<a href="debugging.html">ImHex <code>nc</code>-listener dance</a>) with a live control panel.</p>
 </div>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_system_overview">1. System Overview</h2>
+<h2 id="_why_ssh_not_a_window_inside_qemu">1. Why SSH, not a window inside QEMU</h2>
 <div class="sectionbody">
 <div class="paragraph">
-<p>The driver sits between the IIO core and an I2C device at address <code>0x39</code>.
-In this project the device is provided by a simulator module
-(<code>i2c-envcombo-sim</code>) that registers both the I2C adapter and the client
-device, and delivers interrupts through a software IRQ domain. The driver is
-completely unaware of the simulator&#8201;&#8212;&#8201;it would bind unchanged to real
-hardware exposing the same register map.</p>
+<p>The image boots <code>nographic</code> (no framebuffer), so a real windowed GUI cannot
+run <strong>inside</strong> the guest&#8201;&#8212;&#8201;it runs on the host and reaches the target over
+SSH instead. Two small additions make that possible:</p>
 </div>
-<div class="imageblock">
-<div class="content">
-<img src="diagrams/svg/system-overview.svg" alt="System overview block diagram">
-</div>
-</div>
-<div class="paragraph">
-<p>The diagram shows two distinct communication paths between the device and the
-SoC:</p>
-</div>
-<div class="ulist">
-<ul>
-<li>
-<p><strong>I2C bus</strong> (SDA + SCL)&#8201;&#8212;&#8201;the driver&#8217;s only active path; all register reads
-and writes go here.</p>
-</li>
-<li>
-<p><strong>INT pin</strong>&#8201;&#8212;&#8201;a dedicated physical wire, separate from I2C, that the device
-asserts to interrupt the CPU. The driver never reads or writes this pin;
-the SoC&#8217;s interrupt controller detects its edge and wakes the IRQ thread.</p>
-</li>
-</ul>
-</div>
-<div class="paragraph">
-<p><code>INT_CFG</code> (register <code>0x07</code>) configures how the INT pin behaves (<code>INT_EN</code>,
-<code>INT_POL</code>, <code>INT_LATCH</code>), but the pin itself is not part of the I2C bus.
-When the device has data or a threshold crossing to report, it drives INT
-low&#8201;&#8212;&#8201;the IRQ thread then reads <code>STATUS</code> over I2C to learn what happened.</p>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_hardware_model_als_relevant_subset">2. Hardware Model (ALS-relevant subset)</h2>
-<div class="sectionbody">
-<div class="sect2">
-<h3 id="_register_map">2.1. Register map</h3>
 <table class="tableblock frame-all grid-all stretch">
 <colgroup>
-<col style="width: 14.2857%;">
 <col style="width: 28.5714%;">
-<col style="width: 57.1429%;">
+<col style="width: 71.4286%;">
 </colgroup>
 <thead>
 <tr>
-<th class="tableblock halign-left valign-top">Addr</th>
-<th class="tableblock halign-left valign-top">Register</th>
-<th class="tableblock halign-left valign-top">Use by this driver</th>
+<th class="tableblock halign-left valign-top">Addition</th>
+<th class="tableblock halign-left valign-top">Purpose</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">0x00</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">WHO_AM_I</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Identity check at probe; must read <code>0xEB</code>, else <code>-ENODEV</code></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>IMAGE_FEATURES += "ssh-server-dropbear"</code>
+  (<code>recipes-core/images/envcombo-image.bb</code>)</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Adds a minimal SSH server to the image, consistent with
+  `core-image-minimal&#8217;s footprint.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">0x04-0x05</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">ALS_OUT (MSB/LSB)</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Latched 16-bit big-endian ALS result</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>IMAGE_FEATURES += "allow-root-login allow-empty-password"</code></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Lets the image&#8217;s existing blank root password work over SSH too. These
+  are the actual knobs: OE-core&#8217;s rootfs postcommands rewrite
+  <code>/etc/default/dropbear</code> (shipped with <code>DROPBEAR_EXTRA_ARGS="-w"</code>,
+  disallow root) based on these two <code>IMAGE_FEATURES</code>. Setting
+  <code>DROPBEAR_EXTRA_ARGS</code> directly from the image recipe does <strong>not</strong> work&#8201;&#8212;&#8201;  that variable lives in the image recipe&#8217;s own namespace, not the
+  separate <code>dropbear</code> package&#8217;s.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">0x06</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">CFG</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>ALS_EN</code> (bit 7), <code>ALS_GAIN</code> (bits 4:3), <code>ALS_TIME</code> (bits 2:1)</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">0x07</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">INT_CFG</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>INT_EN</code> (bit 7), <code>INT_LATCH</code> (bit 6), <code>INT_POL</code> (bit 5)</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">0x08-0x09</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">ALS_TH_LOW (MSB/LSB)</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Falling threshold (alert when value goes below)</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">0x0A-0x0B</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">ALS_TH_HIGH (MSB/LSB)</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Rising threshold (alert when value goes above)</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">0x0C</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">STATUS</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>ALS_RDY</code> (bit 3), <code>ALS_INT</code> (bit 0); <strong>all bits clear on read</strong></p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">0x10</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">CALIB_ALS_GAIN</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Factory gain trim, multiplies effective gain</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">0x11</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">CALIB_ALS_TIME</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Factory integration-time override (ms); non-zero = override</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock">0x12</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">PWR_MODE</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">OFF <code>0x00</code> / SLEEP <code>0x01</code> / ONE-SHOT <code>0x02</code> / CONTINUOUS <code>0x03</code></p></td>
-</tr>
-</tbody>
-</table>
-<div class="paragraph">
-<p>All 16-bit fields are big-endian register pairs: MSB at the base address,
-LSB at base + 1. The driver accesses each pair as a <strong>single</strong> SMBus word
-transaction (<code>i2c_smbus_read_word_swapped()</code> /
-<code>i2c_smbus_write_word_swapped()</code> behind <code>envcombo_read_reg16()</code> /
-<code>envcombo_write_reg16()</code>), so a concurrent device-side update&#8201;&#8212;&#8201;e.g. a new
-ALS sample latched in CONTINUOUS mode&#8201;&#8212;&#8201;can never tear the value between
-the two bytes.</p>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_device_behavior_per_datasheet">2.2. Device behavior (per datasheet)</h3>
-<div class="dlist">
-<dl>
-<dt class="hdlist1">Power modes</dt>
-<dd>
-<p>The device powers up in SLEEP: registers are accessible but no measurements
-run. Writing ONE-SHOT triggers a single conversion; on completion the result
-is latched into ALS_OUT, <code>ALS_RDY</code> is set, and the device <strong>returns to SLEEP
-automatically</strong>. CONTINUOUS runs periodic conversions (200 ms cycle in the
-simulator). OFF halts all activity; the driver never uses it, since SLEEP
-already takes no measurements while keeping latched values readable.</p>
-</dd>
-<dt class="hdlist1">STATUS semantics</dt>
-<dd>
-<p>All STATUS bits are cleared by a read, which also re-arms the interrupt.
-<code>ALS_RDY</code> means a new conversion result since the last STATUS read.
-<code>ALS_INT</code> flags a threshold <strong>crossing</strong>&#8201;&#8212;&#8201;a transition from in-range to
-out-of-range. It does not re-fire while the value stays out of range; the
-value must return in-range first. A crossing always coincides with new data
-(<code>ALS_RDY</code>), but the two flags are distinct.</p>
-</dd>
-<dt class="hdlist1">Interrupt pin</dt>
-<dd>
-<p>The INT pin pulses whenever any STATUS bit transitions 0 &#8594; 1, with polarity
-selected by <code>INT_POL</code> (0 = active-low, the power-on default). <code>INT_LATCH=1</code>
-keeps <code>ALS_INT</code> set until STATUS is read even if the value returns in-range;
-with <code>INT_LATCH=0</code> the flag self-clears, which can lose events (see
-<a href="#design-decisions">Design Decisions &amp; Tradeoffs</a>).</p>
-<div class="paragraph">
-<p>Note the intentional opposition: STATUS bits go <code>0 &#8594; 1</code> when an event fires
-(register flag convention: <code>1</code> = yes), while the physical INT pin goes
-<code>HIGH &#8594; LOW</code> (active-low electrical convention). They are two different
-representations of the same event&#8201;&#8212;&#8201;a bit value and a voltage level&#8201;&#8212;&#8201;and
-they move in opposite directions by design.</p>
-</div>
-<div class="listingblock">
-<div class="content">
-<pre>Event fires
-  STATUS bit: 0 → 1   (flag set: "event occurred")
-  INT pin:    HIGH → LOW  (active-low pulse to the CPU)</pre>
-</div>
-</div>
-</dd>
-</dl>
-</div>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_driver_architecture">3. Driver Architecture</h2>
-<div class="sectionbody">
-<div class="sect2">
-<h3 id="_components_and_state">3.1. Components and state</h3>
-<div class="literalblock">
-<div class="content">
-<pre>  struct envcombo_data
-  +--------------------------------------------------------------+
-  | client            i2c_client for SMBus byte access           |
-  | lock              mutex: serializes config &amp; one-shot reads  |
-  | als_done          completion: IRQ thread -&gt; raw-read waiter   |
-  | trig              IIO trigger, fired from the IRQ thread     |
-  | als_gain_idx/als_time_idx   shadow of CFG gain/time fields   |
-  | calib_again/calib_atime     factory trim, read once at probe |
-  | thresh_low/thresh_high      shadow of ALS_TH_LOW/HIGH        |
-  | ev_en                       threshold event enabled (sysfs)  |
-  | buffer_en                   trigger/buffer active            |
-  | scan { u16 light; s64 timestamp } __aligned(8)               |
-  +--------------------------------------------------------------+</pre>
-</div>
-</div>
-<div class="paragraph">
-<p>Locking model:</p>
-</div>
-<div class="ulist">
-<ul>
-<li>
-<p><code>data&#8594;lock</code> (mutex) protects all configuration paths (sysfs writes,
-power-mode changes) and the one-shot raw-read sequence.</p>
-</li>
-<li>
-<p>The threaded IRQ handler deliberately does <strong>not</strong> take the mutex: a raw
-read can hold it for up to 500 ms while waiting on the completion, and
-blocking the handler would delay re-arming the interrupt. Instead the
-handler snapshots <code>ev_en</code> / <code>buffer_en</code> with <code>READ_ONCE()</code>, paired with
-<code>WRITE_ONCE()</code> on the sysfs write side.</p>
-</li>
-<li>
-<p>All resources are <code>devm_</code>-managed; the driver has no <code>.remove()</code>.</p>
-</li>
-</ul>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_power_mode_state_machine">3.2. Power-mode state machine</h3>
-<div class="paragraph">
-<p>The driver keeps the device in the lowest power state that satisfies the
-currently active consumers. Two boolean inputs drive the FSM: <code>buffer_en</code>
-(triggered buffer running) and <code>ev_en</code> (threshold event enabled).
-<code>envcombo_update_power_mode()</code> recomputes the target mode whenever either
-changes; ONE-SHOT is a transient state used only for on-demand raw reads
-while otherwise idle.</p>
-</div>
-<div class="paragraph">
-<p><code>PWR_MODE</code> is <strong>driver-derived, not a userspace knob</strong>: there is no sysfs
-attribute to set it. Userspace only toggles the standard IIO features&#8201;&#8212;&#8201;enabling/disabling the buffer (via <code>set_trigger_state</code>) and the threshold
-event (via <code>write_event_config</code>)&#8201;&#8212;&#8201;and the driver maps that combination to
-SLEEP or CONTINUOUS (CONTINUOUS while either is active, SLEEP once the last
-one is disabled). This keeps the power state always consistent with what is
-actually in use, which a directly-writable mode could not guarantee.</p>
-</div>
-<div class="imageblock">
-<div class="content">
-<img src="diagrams/svg/power-fsm.svg" alt="Power-mode state machine">
-</div>
-</div>
-<div class="paragraph">
-<p>While CONTINUOUS is active, a sysfs raw read skips the ONE-SHOT round-trip
-and simply reads the latched ALS_OUT registers&#8201;&#8212;&#8201;they are refreshed every
-cycle anyway.</p>
-</div>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_als_usage_flows">4. ALS Usage Flows</h2>
-<div class="sectionbody">
-<div class="sect2">
-<h3 id="_probe_initialization">4.1. Probe / initialization</h3>
-<div class="imageblock">
-<div class="content">
-<img src="diagrams/svg/probe-flow.svg" alt="Probe / initialization flow">
-</div>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_on_demand_raw_read_one_shot_path">4.2. On-demand raw read (one-shot path)</h3>
-<div class="paragraph">
-<p><code>cat /sys/bus/iio/devices/iio:deviceN/in_illuminance_raw</code> while no buffer or
-event is active:</p>
-</div>
-<div class="imageblock">
-<div class="content">
-<img src="diagrams/svg/raw-read-seq.svg" alt="On-demand raw read sequence">
-</div>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_threshold_event_flow">4.3. Threshold event flow</h3>
-<div class="paragraph">
-<p>Userspace configures <code>in_illuminance_thresh_rising_value</code> (&#8594; ALS_TH_HIGH)
-and <code>in_illuminance_thresh_falling_value</code> (&#8594; ALS_TH_LOW), then enables the
-single <code>&#8230;&#8203;_thresh_either_en</code> switch. Enabling it drives the FSM to
-CONTINUOUS (<code>INT_CFG.INT_EN</code> is already set at probe, since the data-ready
-interrupt is needed for one-shot reads too).</p>
-</div>
-<div class="imageblock">
-<div class="content">
-<img src="diagrams/svg/event-flow-seq.svg" alt="Threshold event delivery sequence">
-</div>
-</div>
-<div class="paragraph">
-<p>The hardware reports only "a threshold was crossed" via the single
-direction-less <code>ALS_INT</code> bit, so the event spec follows the datasheet: the
-two threshold <strong>values</strong> are exposed through the rising/falling <code>VALUE</code>
-attributes, while the event itself is enabled and delivered with
-<code>IIO_EV_DIR_EITHER</code>. Userspace that needs to know which side of the window
-was crossed reads the current value (see <a href="#design-decisions">Design Decisions &amp; Tradeoffs</a>).</p>
-</div>
-<div class="paragraph">
-<p>Threshold writes are validated: a rising value below the current falling
-value (or vice versa), values outside 0..65535, and negative values are all
-rejected with <code>-EINVAL</code>, so the window stays well-formed.</p>
-</div>
-</div>
-<div class="sect2">
-<h3 id="_triggered_buffer_flow">4.4. Triggered buffer flow</h3>
-<div class="paragraph">
-<p>The driver registers its own IRQ-backed trigger; no external trigger is
-needed. Enabling the buffer drives the FSM to CONTINUOUS, and every
-conversion produces one scan record.</p>
-</div>
-<div class="imageblock">
-<div class="content">
-<img src="diagrams/svg/buffer-flow-seq.svg" alt="Triggered buffer capture sequence">
-</div>
-</div>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_userspace_abi">5. Userspace ABI</h2>
-<div class="sectionbody">
-<table class="tableblock frame-all grid-all stretch">
-<colgroup>
-<col style="width: 33.3333%;">
-<col style="width: 22.2222%;">
-<col style="width: 44.4445%;">
-</colgroup>
-<thead>
-<tr>
-<th class="tableblock halign-left valign-top">sysfs attribute (<code>iio:deviceN/</code>)</th>
-<th class="tableblock halign-left valign-top">Backing register</th>
-<th class="tableblock halign-left valign-top">Semantics</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>name</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&#8201;&#8212;&#8201;</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>"envcombo"</code></p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>in_illuminance_raw</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">ALS_OUT</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">On-demand read; one-shot conversion when idle, latched value when CONTINUOUS</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>in_illuminance_scale</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">CFG gain + CALIB_ALS_GAIN</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>1 / (gain x calib_gain)</code>, <code>IIO_VAL_FRACTIONAL</code>; illustrative 1.0 lux/count @ gain 1</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>in_illuminance_hardwaregain</code> (+<code>_available</code>)</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">CFG[4:3]</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">One of <code>1 4 16 64</code>; invalid writes &#8594; <code>-EINVAL</code></p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>in_illuminance_integration_time</code> (+<code>_available</code>)</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">CFG[2:1]</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">One of <code>0.05 0.1 0.2 0.4</code> <strong>seconds</strong> (<code>IIO_VAL_INT_PLUS_MICRO</code>); when the CALIB_ALS_TIME override is set, writes return <code>-EOPNOTSUPP</code> and <code>_available</code> lists only the calibrated time</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>events/in_illuminance_thresh_rising_value</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">ALS_TH_HIGH</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Raw ALS counts (<code>0..65535</code>, same unit as <code>in_illuminance_raw</code>); must stay &gt;= falling value</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>events/in_illuminance_thresh_falling_value</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">ALS_TH_LOW</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Raw ALS counts (<code>0..65535</code>); must stay &lt;= rising value</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>events/in_illuminance_thresh_either_en</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">power FSM</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Enables the (direction-less) crossing event and CONTINUOUS mode</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>buffer/</code>, <code>scan_elements/</code>, <code>trigger/</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&#8201;&#8212;&#8201;</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Standard IIO triggered-buffer interface; scan: u16 light @ index 0 + s64 timestamp</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>/dev/iio:deviceN</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&#8201;&#8212;&#8201;</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Buffered scan records + <code>IIO_GET_EVENT_FD_IOCTL</code> event stream</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>recipes-utils/envcombo-evtcat/</code></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">A tiny libc-only helper installed on the target. A plain shell can&#8217;t
+  issue <code>IIO_GET_EVENT_FD_IOCTL</code>, so threshold events need this helper to
+  open the chardev&#8217;s event fd and stream raw <code>iio_event_data</code> records to
+  stdout for the GUI to read over an SSH exec channel. Retries its own
+  <code>open()</code> for up to ~2s on <code>EBUSY</code>&#8201;&#8212;&#8201;a previous instance, killed when its
+  SSH channel was torn down, is blocked in <code>poll()</code> on the <strong>event</strong> fd at
+  that point, not on anything tied to the channel, so the kill is what
+  actually reclaims the chardev, and that reclaim isn&#8217;t instantaneous.</p></td>
 </tr>
 </tbody>
 </table>
 </div>
 </div>
 <div class="sect1">
-<h2 id="design-decisions">6. Design Decisions &amp; Tradeoffs</h2>
-<div class="sectionbody">
-<div class="dlist">
-<dl>
-<dt class="hdlist1">Plain <code>i2c_smbus</code> instead of regmap</dt>
-<dd>
-<p>The device has 19 byte-wide registers and the driver touches 13 of them (the
-other 6 are temperature/humidity registers, out of scope here); a regmap
-adds little. Decisive practical point: <code>CONFIG_REGMAP_I2C</code> is a
-hidden Kconfig symbol that in-tree drivers pull in via <code>select</code>, which an
-out-of-tree module cannot do cleanly. Register caching would be wrong
-anyway (STATUS is clear-on-read, ALS_OUT is hardware-latched).</p>
-</dd>
-<dt class="hdlist1">Hybrid power strategy (SLEEP / ONE-SHOT / CONTINUOUS)</dt>
-<dd>
-<p>Matches the power-on default (SLEEP) and keeps the device idle until
-userspace actually uses it&#8201;&#8212;&#8201;no conversions, interrupts, or I2C traffic run
-while nothing is consuming ALS data&#8201;&#8212;&#8201;correct resource use that keeps the
-device in low-power SLEEP mode until something needs it. Tradeoff:
-more state tracking (two consumer flags<br>
-<code>envcombo_update_power_mode()</code>) than a naive "CONTINUOUS at probe" design,
-and the first raw read pays one conversion of latency (bounded by the 500 ms
-completion timeout).</p>
-</dd>
-<dt class="hdlist1"><code>INT_LATCH=1</code></dt>
-<dd>
-<p>With latching off, <code>ALS_INT</code> self-clears once the value returns in-range.
-If that happens between the INT pulse and the threaded handler&#8217;s STATUS
-read, the event would be silently lost. Latching guarantees the handler
-observes every real crossing. Cost: none for this driver, since the single
-STATUS read both acknowledges and re-arms.</p>
-</dd>
-<dt class="hdlist1">Threaded IRQ, single STATUS read</dt>
-<dd>
-<p><code>devm_request_threaded_irq</code> with a NULL primary handler (so <code>IRQF_ONESHOT</code>
-is mandatory) keeps all I2C traffic out of hard-IRQ context. One STATUS
-read serves every consumer at once&#8201;&#8212;&#8201;raw-read completion, buffer trigger,
-and threshold events can all result from the same pulse, since a crossing
-always coincides with new data. The INT pin pulses on each STATUS 0 &#8594; 1
-transition, so the IRQ is requested as <code>IRQF_TRIGGER_FALLING</code>, matching
-<code>INT_POL=0</code> (active-low), the power-on default the driver keeps. Because
-the trigger fires from thread context, the driver uses
-<code>iio_trigger_poll_nested()</code> (the plain <code>iio_trigger_poll()</code> is reserved for
-hard-IRQ context) and the buffer handler takes its own timestamp.</p>
-</dd>
-<dt class="hdlist1"><code>IIO_EV_DIR_EITHER</code> events</dt>
-<dd>
-<p>The hardware reports a crossing through a single direction-less <code>ALS_INT</code>
-flag, so the driver follows the datasheet and pushes the event as
-<code>IIO_EV_TYPE_THRESH</code> / <code>IIO_EV_DIR_EITHER</code> (the in-tree pattern used by
-e.g. <code>apds9960</code>): rising/falling event specs carry only the two threshold
-values, a third EITHER spec carries the single enable. Synthesizing a
-direction in the driver by re-reading the sample would be guesswork during
-fast swings; the EITHER contract is honest about what the silicon knows.</p>
-</dd>
-<dt class="hdlist1">Mutex-free IRQ thread</dt>
-<dd>
-<p>The raw-read path can hold <code>data&#8594;lock</code> for up to 500 ms (completion
-timeout). Taking that mutex in the IRQ thread would stall interrupt
-re-arming behind a slow reader, so the handler uses <code>READ_ONCE()</code> snapshots
-of <code>ev_en</code> / <code>buffer_en</code> instead, paired with <code>WRITE_ONCE()</code> writers.</p>
-</dd>
-<dt class="hdlist1"><code>devm_</code>-managed lifecycle</dt>
-<dd>
-<p>Every resource (IIO device, trigger, buffer, IRQ) is device-managed and
-torn down in reverse order automatically; the driver needs no <code>.remove()</code>.
-The <code>iio_trigger_get()</code> reference taken for <code>indio_dev&#8594;trig</code> is dropped by
-the IIO core itself in <code>iio_dev_release()</code>&#8201;&#8212;&#8201;the driver must <strong>not</strong> add its
-own put (doing so underflows the trigger refcount on unbind). The device is
-left in SLEEP whenever no consumer is active, which is also the correct
-state to leave behind on unbind.</p>
-</dd>
-</dl>
-</div>
-</div>
-</div>
-<div class="sect1">
-<h2 id="_source_layout">7. Source Layout</h2>
+<h2 id="_source_layout">2. Source layout</h2>
 <div class="sectionbody">
 <table class="tableblock frame-all grid-all stretch">
 <colgroup>
-<col style="width: 42.8571%;">
-<col style="width: 57.1429%;">
+<col style="width: 28.5714%;">
+<col style="width: 71.4286%;">
 </colgroup>
 <thead>
 <tr>
-<th class="tableblock halign-left valign-top">Path</th>
+<th class="tableblock halign-left valign-top">File</th>
 <th class="tableblock halign-left valign-top">Role</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>recipes-kernel/envcombo-driver/files/envcombo.c</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">The IIO driver (this document)</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>src/main.rs</code></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>eframe</code> entry point; requests a maximized window (with a
+  generous fallback size) so all six sections have room to breathe.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>recipes-kernel/envcombo-sim/files/i2c-envcombo-sim.c</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Provided bus + device simulator (reference only, not modified)</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>src/ssh.rs</code></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Blocking <code>ssh2</code> transport: one-shot <code>exec_async</code> (fresh
+  connection per call, off the UI thread) and cancellable <code>start_stream</code>
+  (one connection held open for the duration of a live stream, yielding a
+  <code>StreamEvent::Data</code>/<code>Closed</code> enum so a remote command that exits&#8201;&#8212;&#8201;  cleanly or not&#8201;&#8212;&#8201;is reported instead of going silent). Authentication
+  tries <code>none</code>, <code>password</code>, then <code>keyboard-interactive</code> in turn, since
+  dropbear (and PAM-backed servers generally) often route blank-password
+  logins through <code>keyboard-interactive</code> even when <code>password</code> looks
+  supported.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>recipes-kernel/linux/linux-yocto/iio.cfg</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Kernel config fragment (IIO core, buffer, trigger, kfifo)</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>src/abi.rs</code></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Sysfs/debugfs attribute paths, the simulator&#8217;s register-map
+  decode, the combined snapshot command + parser, the IIO event-code
+  decoder, and the stray-process cleanup commands (<code>kill_stray_dd_cmd</code>,
+  <code>kill_stray_evtcat_cmd</code>) run before each stream start.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>recipes-utils/envcombo-test/files/envcombo-test/src/main.rs</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Rust userspace test harness</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>src/app.rs</code></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">The <code>eframe::App</code>&#8201;&#8212;&#8201;connection state, the 1-second
+  auto-refresh poll, and the six collapsible sections.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_connecting">3. Connecting</h2>
+<div class="sectionbody">
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-shell" data-lang="shell">runqemu qemuarm64 envcombo-image nographic slirp</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>The exact host-side forwarded SSH port depends on your <code>runqemu</code> setup
+(conventionally <code>2222 &#8594; 22</code> with <code>slirp</code>); <code>envcombo-ctl&#8217;s connection bar
+defaults to `localhost:2222</code> / user <code>root</code> / blank password, all editable.
+If the default doesn&#8217;t connect, check runqemu&#8217;s printed network
+configuration, or test manually first:</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-shell" data-lang="shell">ssh root@localhost -p 2222   # should log in with no password prompt</code></pre>
+</div>
+</div>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_building_running">4. Building &amp; running</h2>
+<div class="sectionbody">
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-shell" data-lang="shell">cd host-tools/envcombo-ctl
+cargo build --release
+cargo run --release</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>Enter the host/port/user/password in the top bar and click <strong>Connect</strong>. On
+success the tool runs the same discovery the test harness uses
+(<code>grep -l envcombo /sys/bus/iio/devices/iio:device*/name</code>) to find the
+device, then starts a 1-second background poll of every read-only attribute
+(raw/scale/gain/integration time, thresholds, scan_elements, buffer state,
+and the simulator&#8217;s debugfs register file) so every section stays live
+without needing a manual refresh.</p>
+</div>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_sections">5. Sections</h2>
+<div class="sectionbody">
+<div class="paragraph">
+<p>One page, six collapsible sections (<code>Channel</code>/<code>Events</code>/<code>Buffer</code> open by
+default, <code>State</code>/<code>Simulator</code>/<code>Capture / Export</code> collapsed)&#8201;&#8212;&#8201;nothing is
+behind a tab switch, just folded out of the way until you need it.</p>
+</div>
+<div class="imageblock">
+<div class="content">
+<img src="images/driver-ctrl-gui.png" alt="envcombo-ctl GUI showing live Channel Events and Buffer data" width="900">
+</div>
+<div class="title">Figure 1. envcombo-ctl with Channel, Events, and Buffer open&#8201;&#8212;&#8201;a live event log and the light-vs-sample plot crossing its rising threshold</div>
+</div>
+<table class="tableblock frame-all grid-all stretch">
+<colgroup>
+<col style="width: 20%;">
+<col style="width: 80%;">
+</colgroup>
+<thead>
+<tr>
+<th class="tableblock halign-left valign-top">Section</th>
+<th class="tableblock halign-left valign-top">Covers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Channel</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>in_illuminance_raw</code>/<code>_scale</code>, <code>hardwaregain</code> (+ <code>_available</code>),
+  <code>integration_time</code> (+ <code>_available</code>); the integration-time control is
+  disabled with an explanatory tooltip when the simulator&#8217;s <code>CAL_ATIME</code>
+  factory override is active.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><code>DESIGN.md</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Condensed 1-2 page design rationale (assignment deliverable)</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Events</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>events/in_illuminance_thresh_{rising,falling}_value</code>,
+  <code>thresh_either_en</code>, and a live-scrolling event log fed by
+  <code>envcombo-evtcat</code> over a dedicated SSH channel. Each logged line decodes
+  the IIO event code to a human-readable label (this driver only ever
+  emits one: <code>ALS threshold crossing (EITHER)</code>) and follows up with a
+  separate <code>in_illuminance_raw</code> read to show the light value at the time
+  of the crossing&#8201;&#8212;&#8201;the event record itself carries no sample, only an id
+  and a timestamp.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Buffer</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>scan_elements/in_illuminance_en</code> / <code>in_timestamp_en</code> and <code>buffer/length</code>
+  (used by the triggered-buffer capture in Capture/Export below), plus a
+  live light-vs-sample plot with the current falling/rising thresholds
+  drawn as dashed reference lines, so a crossing is visible on the graph
+  as it happens. The plot polls <code>in_illuminance_raw</code> over plain sysfs
+  every ~250ms rather than streaming <code>/dev/iio:deviceN</code> with <code>dd</code>: the IIO
+  core only allows one opener of that chardev at a time, and a continuous
+  <code>dd</code> would hold it for as long as the plot ran, permanently locking out
+  the Events section&#8217;s <code>envcombo-evtcat</code> (which needs the same chardev
+  briefly, to bootstrap its event fd). Polling sysfs instead means the
+  live plot and the event monitor can run at the same time.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">State</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Read-only PWR_MODE/STATUS/CFG/INT_CFG decode from the simulator&#8217;s debugfs
+  register file&#8201;&#8212;&#8201;never written, the same rule
+  <a href="debugging.html">the manual debugging workflow</a> and the test harness
+  follow.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Simulator</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">The full 19-byte debugfs register file as a labeled hex grid (including
+  the out-of-scope TEMP/HUMIDITY/CAL_TOFF/CAL_HOFF fields), for
+  side-by-side comparison with what <a href="debugging.html">ImHex</a> shows.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Capture / Export</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">One-click capture of the register snapshot or N buffer records straight
+  to a local <code>.bin</code> file (see below), plus <code>modprobe</code>/<code>rmmod</code> convenience
+  buttons for both modules. The buffer-record capture still uses <code>dd</code>
+  against <code>/dev/iio:deviceN</code>&#8201;&#8212;&#8201;it&#8217;s a short, bounded, one-shot operation,
+  not a continuous hold on the chardev, so it doesn&#8217;t have the Buffer
+  section live-plot&#8217;s conflict with a running event monitor.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_captureexport_replacing_the_nc_dance">6. Capture/Export: replacing the <code>nc</code> dance</h2>
+<div class="sectionbody">
+<div class="paragraph">
+<p><a href="debugging.html">Manual Debugging &amp; Binary Inspection</a> captures bytes
+for ImHex by starting a one-shot <code>nc</code> listener on the host and having the
+guest <code>nc</code> the blob out through the slirp gateway. With SSH available, the
+Capture/Export section does the same job in one click: it pulls the bytes over
+the already-open SSH connection and writes them directly to a local
+directory (the <strong>export directory</strong> field&#8201;&#8212;&#8201;point it at a Windows-visible
+path such as <code>/mnt/c/Users/&lt;user&gt;/</code> to open the result straight in ImHex,
+same as before).</p>
+</div>
+<div class="ulist">
+<ul>
+<li>
+<p><strong>Save register snapshot</strong>&#8201;&#8212;&#8201;equivalent to
+<code>hexdump -ve '1/1 "%02x"' /sys/kernel/debug/envcombo-sim/regs</code>, written
+as <code>regs.bin</code>. Decode with <code>docs/imhex/envcombo-als.hexpat</code>.</p>
+</li>
+<li>
+<p><strong>Capture buffer records</strong>&#8201;&#8212;&#8201;enables the buffer, captures exactly N
+records at the current <code>scan_elements</code> configuration (2-byte light-only
+or 16-byte light+timestamp), disables the buffer, and writes
+<code>buffer_records.bin</code>. Decode with <code>docs/imhex/envcombo-als-plot.hexpat</code>
+or <code>envcombo-als-records.hexpat</code> depending on which scan elements were
+enabled. Capturing N records while <code>CONTINUOUS</code> takes roughly
+<code>N * 200ms</code>, same as the manual <code>dd</code> workflow&#8201;&#8212;&#8201;the GUI stays
+responsive while it waits.</p>
+</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_troubleshooting">7. Troubleshooting</h2>
+<div class="sectionbody">
+<table class="tableblock frame-all grid-all stretch">
+<colgroup>
+<col style="width: 37.5%;">
+<col style="width: 62.5%;">
+</colgroup>
+<thead>
+<tr>
+<th class="tableblock halign-left valign-top">Symptom</th>
+<th class="tableblock halign-left valign-top">Check</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Connect fails immediately</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Confirm dropbear is reachable: <code>ssh root@localhost -p 2222</code> from the
+  host. If that also fails, check the actual forwarded port in runqemu&#8217;s
+  startup output, or that the image was rebuilt after adding
+  <code>ssh-server-dropbear allow-root-login allow-empty-password</code> to
+  <code>envcombo-image.bb&#8217;s `IMAGE_FEATURES</code>.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Connect fails with an authentication error</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">The tool already tries <code>none</code>, <code>password</code>, and <code>keyboard-interactive</code> in
+  turn (see Source layout above), so a real auth failure here usually
+  means the password field doesn&#8217;t match what the target actually expects
+ &#8201;&#8212;&#8201;confirm the same host/port/user/password combination works from a
+  plain <code>ssh</code> first.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Connected, but every section says no device found</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Both kernel modules need to be loaded first&#8201;&#8212;&#8201;use the Capture/Export
+  section&#8217;s <strong>modprobe</strong> button, or <code>modprobe i2c-envcombo-sim &amp;&amp; modprobe
+  envcombo</code> on the target.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Events section never logs anything</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>envcombo-evtcat</code> must be on the target&#8217;s <code>PATH</code> (installed by the
+  <code>envcombo-evtcat</code> package); also confirm <code>thresh_either_en</code> is on and
+  the threshold window is actually crossable from the current raw value.
+  If it logs <code>Device or resource busy</code>, something else is holding
+  <code>/dev/iio:deviceN</code> open&#8201;&#8212;&#8201;the live plot no longer can (it&#8217;s sysfs-only
+  now), so this would mean a Capture/Export buffer capture is still
+  running; let it finish, or stop it, then retry.</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Buffer plot is flat or empty</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Connect status must show a device (the plot polls <code>in_illuminance_raw</code>
+  over sysfs, independent of <code>scan_elements</code>); if a one-shot conversion is
+  timing out you&#8217;d see that surfaced as an error instead, via the same
+  status line export/channel errors use.</p></td>
 </tr>
 </tbody>
 </table>
@@ -1026,7 +816,7 @@ state to leave behind on unbind.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-21 17:43:16 +0300
+Last updated 2026-06-21 22:49:11 +0300
 </div>
 </div>
 </body>

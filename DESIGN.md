@@ -19,3 +19,6 @@ every page:
    buffers, full timestamped records, the SMBus transaction waveforms, and
    live I2C traffic capture. **Recommended:** this page walks through how I
    tackled bugs and inspected the driver's functionality on a running system.
+5. [Host GUI (envcombo-ctl)](docs/envcombo-ctl.html) — bonus tooling: a
+   Rust/egui desktop app that drives the full driver ABI over SSH instead of
+   by hand.

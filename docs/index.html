@@ -503,6 +503,13 @@ provided device simulator and a Rust end-to-end test harness.</p>
   register file, plotting a captured ALS buffer, and reading full 16-byte
   records (including how the nanosecond timestamp is laid out and read).</p></td>
 </tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><a href="envcombo-ctl.html">5. Host GUI (envcombo-ctl)</a></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">A Rust/egui desktop app that drives the full driver ABI over SSH: live
+  channel/event/buffer control, a read-only simulator register view, and
+  one-click register/buffer capture for ImHex&#8201;&#8212;&#8201;bonus tooling, not part of
+  the bitbake build.</p></td>
+</tr>
 </tbody>
 </table>
 </div>
@@ -539,8 +546,16 @@ provided device simulator and a Rust end-to-end test harness.</p>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Rust test harness recipe + source</p></td>
 </tr>
 <tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>recipes-utils/envcombo-evtcat/</code></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">On-target event-fd helper for the host GUI</p></td>
+</tr>
+<tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>recipes-core/images/envcombo-image.bb</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Test image (core-image-minimal + the above)</p></td>
+</tr>
+<tr>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><code>host-tools/envcombo-ctl/</code></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Host-side GUI (not part of the bitbake build)</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>conf/layer.conf</code></p></td>
@@ -573,7 +588,7 @@ to the sources); render the HTML pages with <code>asciidoctor docs/*.adoc</code>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2026-06-21 09:23:51 +0300
+Last updated 2026-06-21 18:37:39 +0300
 </div>
 </div>
 </body>
